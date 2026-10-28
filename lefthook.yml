@@ -1,0 +1,16 @@
+# Hooks run through lefthook (devDependency; hooks are installed by `npm install`, or run `npx lefthook install`).
+pre-commit:
+  commands:
+    typecheck:
+      glob: "*.{ts,html,wgsl,json}"
+      run: npm run typecheck
+    unit:
+      glob: "*.ts"
+      run: node --test test/persona.test.ts test/config.test.ts test/fetch-pdfium.test.ts
+
+pre-push:
+  commands:
+    test:
+      run: npm test
+    build:
+      run: npm run build

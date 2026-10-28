@@ -1,0 +1,30 @@
+{
+  "release": "chromium/8125",
+  "baseUrl": "https://github.com/bblanchon/pdfium-binaries/releases/download",
+  "assets": {
+    "linux-x64": {
+      "asset": "pdfium-linux-x64.tgz",
+      "sha256": "e1c3ce6e270cb5e0c20816b379ad9f2c1309972697c505f508de92bf5e7d6659",
+      "lib": "libpdfium.so",
+      "member": "lib/libpdfium.so"
+    },
+    "linux-arm64": {
+      "asset": "pdfium-linux-arm64.tgz",
+      "sha256": "8b8818f2ec57d1b213d952ca6d7f0ffeca9d0110487d0e20ad83ba918bc92efa",
+      "lib": "libpdfium.so",
+      "member": "lib/libpdfium.so"
+    },
+    "darwin-arm64": {
+      "asset": "pdfium-mac-arm64.tgz",
+      "sha256": "4939bd935ac83ddc09a3a4f038bc43a19cea1660316a3667f26cb07a070e139d",
+      "lib": "libpdfium.dylib",
+      "member": "lib/libpdfium.dylib"
+    },
+    "win32-x64": {
+      "asset": "pdfium-win-x64.tgz",
+      "sha256": "9a964261760cff52570aabf038ab346d3a5034dd8b30d0d5fe8861235d356b8b",
+      "lib": "pdfium.dll",
+      "member": "bin/pdfium.dll"
+    }
+  }
+}

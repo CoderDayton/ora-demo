@@ -1,0 +1,27 @@
+{
+  "ffi_format": 6,
+  "functions": [
+    { "name": "oraSqlOpen", "symbol": "ora_sql_open", "params": ["string"], "returns": "i32" },
+    { "name": "oraSqlClose", "symbol": "ora_sql_close", "params": [], "returns": "i32" },
+    { "name": "oraSqlExec", "symbol": "ora_sql_exec", "params": ["string"], "returns": "i32" },
+    { "name": "oraSqlPrepare", "symbol": "ora_sql_prepare", "params": ["string"], "returns": "i32" },
+    { "name": "oraSqlFinalize", "symbol": "ora_sql_finalize", "params": ["i32"], "returns": "i32" },
+    { "name": "oraSqlBindText", "symbol": "ora_sql_bind_text", "params": ["i32", "i32", "string"], "returns": "i32" },
+    { "name": "oraSqlBindNum", "symbol": "ora_sql_bind_num", "params": ["i32", "i32", "f64"], "returns": "i32" },
+    { "name": "oraSqlBindNull", "symbol": "ora_sql_bind_null", "params": ["i32", "i32"], "returns": "i32" },
+    { "name": "oraSqlStep", "symbol": "ora_sql_step", "params": ["i32"], "returns": "i32" },
+    { "name": "oraSqlColCount", "symbol": "ora_sql_col_count", "params": ["i32"], "returns": "i32" },
+    { "name": "oraSqlColType", "symbol": "ora_sql_col_type", "params": ["i32", "i32"], "returns": "i32" },
+    { "name": "oraSqlColNum", "symbol": "ora_sql_col_num", "params": ["i32", "i32"], "returns": "f64" },
+    { "name": "oraSqlColText", "symbol": "ora_sql_col_text", "params": ["i32", "i32", "mutable-bytes"], "returns": "i32" },
+    { "name": "oraSqlLastRowid", "symbol": "ora_sql_last_rowid", "params": [], "returns": "f64" },
+    { "name": "oraSqlErr", "symbol": "ora_sql_err", "params": ["mutable-bytes"], "returns": "i32" },
+    { "name": "oraPdfOpen", "symbol": "ora_pdf_open", "params": ["mutable-bytes"], "returns": "i32" },
+    { "name": "oraPdfRender", "symbol": "ora_pdf_render", "params": ["i32", "i32", "i32"], "returns": "i32" },
+    { "name": "oraPdfCopy", "symbol": "ora_pdf_copy", "params": ["mutable-bytes"], "returns": "i32" },
+    { "name": "oraPdfRenderRaw", "symbol": "ora_pdf_render_raw", "params": ["i32", "i32"], "returns": "i32" },
+    { "name": "oraPdfCopyRaw", "symbol": "ora_pdf_copy_raw", "params": ["mutable-bytes"], "returns": "i32" },
+    { "name": "oraPdfClose", "symbol": "ora_pdf_close", "params": [], "returns": "i32" }
+  ],
+  "libraries": ["./build/liborasql.a"]
+}

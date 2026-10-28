@@ -1,0 +1,38 @@
+{
+  "name": "ora",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "allowScripts": {
+    "scriptc": true,
+    "lefthook": true
+  },
+  "scripts": {
+    "ffi": "node scripts/build-ffi.ts",
+    "build:web": "vite build",
+    "assets": "npm run build:web && node scripts/embed.ts",
+    "build:server": "npm run ffi && npm run assets && scriptc build src/server/index.ts --ffi ffi/all.gen.json -o bin/ora && node -e \"require('fs').rmSync('bin/index.ll',{force:true})\"",
+    "build": "npm run build:server",
+    "start": "./bin/ora",
+    "test": "npm run ffi && scriptc run test/docs.test.ts --ffi ffi/pdf.gen.json && scriptc run test/config.test.ts && scriptc run test/models.test.ts && node --test test/persona.test.ts && scriptc run test/store.test.ts --ffi ffi/sqlite.gen.json && scriptc run test/context.test.ts --ffi ffi/sqlite.gen.json",
+    "typecheck": "npm run assets && tsc --noEmit",
+    "render": "node scripts/render-check.ts"
+  },
+  "dependencies": {
+    "@vgpu/wgsl": "^0.6.0",
+    "vgpu": "^0.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/pngjs": "^6.0.5",
+    "@webgpu/types": "^0.1.74",
+    "lefthook": "^2.2.2",
+    "pngjs": "^7.0.0",
+    "scriptc": "^0.4.5",
+    "typescript": "^7.0.2",
+    "vite": "^7.0.0"
+  }
+}

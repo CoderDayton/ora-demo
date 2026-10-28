@@ -1,0 +1,26 @@
+# dependencies
+node_modules/
+
+# build output
+bin/
+dist/
+ffi/build/
+.scriptc/
+*.ll
+*.tsbuildinfo
+
+# runtime data: chats, documents, persona memory
+data/
+
+# local config and agent notes
+CLAUDE.md
+.claude/
+
+# logs and OS cruft
+*.log
+.DS_Store
+.env
+.env.*
+*.gen.*
+ffi/vendor/pdfium/lib/
+docs/plans/
