@@ -65,8 +65,7 @@ export function renderChats(): void {
 }
 
 export async function openChat(id: number): Promise<void> {
-  if (S.busy) hooks.abortChat();
-  hooks.stopSpeech();
+  await hooks.abortChat();
   const d = await api<ChatData>(`/api/chats/${id}`);
   S.chatId = id;
   S.hist = d.messages.map(m => ({ role: m.role, content: m.content }));
@@ -81,8 +80,7 @@ export async function openChat(id: number): Promise<void> {
 }
 
 export async function newChat(): Promise<void> {
-  if (S.busy) hooks.abortChat();
-  hooks.stopSpeech();
+  await hooks.abortChat();
   S.chatId = null;
   S.hist = [];
   S.docs = [];
@@ -208,11 +206,12 @@ async function pageUrl(docId: number, n: number): Promise<string> {
   return url;
 }
 
-export interface DocPayload { system: string; lead: Msg[]; tokens: number; note: string }
+// pageTokens covers the page images only; the excerpt text is part of `system` and is counted with it.
+export interface DocPayload { system: string; lead: Msg[]; pageTokens: number; note: string }
 
 // What a request carries for this chat's documents: excerpts as system text, PDF pages as leading images.
 export async function docPayload(query: string): Promise<DocPayload> {
-  const out: DocPayload = { system: '', lead: [], tokens: 0, note: '' };
+  const out: DocPayload = { system: '', lead: [], pageTokens: 0, note: '' };
   if (S.chatId === null || !S.docs.length) return out;
   const pdfs = S.docs.filter(d => d.kind === 'pdf');
   const hasText = S.docs.some(d => d.kind !== 'pdf');
@@ -233,7 +232,7 @@ export async function docPayload(query: string): Promise<DocPayload> {
         for (const n of take) parts.push({ type: 'image_url', image_url: { url: await pageUrl(d.id, n) } });
         out.lead.push({ role: 'user', content: parts });
         out.lead.push({ role: 'assistant', content: `I have read those pages of "${d.name}".` });
-        out.tokens += take.length * imgTokens();
+        out.pageTokens += take.length * imgTokens();
       }
       if (dropped) out.note = `context limit: ${dropped} selected PDF page(s) left out`;
     }
@@ -244,7 +243,6 @@ export async function docPayload(query: string): Promise<DocPayload> {
     const c = await api<{ mode: string; text: string } | null>(`/api/chats/${S.chatId}/context?q=${encodeURIComponent(query)}&budget=${budget}`);
     if (c) {
       out.system = `\n\nThe user uploaded reference documents${c.mode === 'excerpts' ? ' (the most relevant excerpts follow)' : ''}. Use them to answer and name the document you rely on.\n\n${c.text}`;
-      out.tokens += Math.ceil(c.text.length / CHARS_PER_TOKEN);
     }
   }
   return out;

@@ -17,7 +17,7 @@
     "build:server": "npm run ffi && npm run assets && scriptc build src/server/index.ts --ffi ffi/all.gen.json -o bin/ora && node -e \"require('fs').rmSync('bin/index.ll',{force:true})\"",
     "build": "npm run build:server",
     "start": "./bin/ora",
-    "test": "npm run ffi && scriptc run test/docs.test.ts --ffi ffi/pdf.gen.json && scriptc run test/config.test.ts && scriptc run test/models.test.ts && node --test test/persona.test.ts && scriptc run test/store.test.ts --ffi ffi/sqlite.gen.json && scriptc run test/context.test.ts --ffi ffi/sqlite.gen.json",
+    "test": "npm run ffi && scriptc run test/docs.test.ts --ffi ffi/pdf.gen.json && scriptc run test/config.test.ts && scriptc run test/models.test.ts && scriptc run test/proxy.test.ts && node --test test/persona.test.ts test/history.test.ts test/vad.test.ts test/markdown.test.ts && scriptc run test/store.test.ts --ffi ffi/sqlite.gen.json && scriptc run test/context.test.ts --ffi ffi/sqlite.gen.json",
     "typecheck": "npm run assets && tsc --noEmit",
     "render": "node scripts/render-check.ts"
   },
@@ -26,6 +26,7 @@
     "vgpu": "^0.6.0"
   },
   "devDependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
     "@types/node": "^26.6.5",
     "@types/pngjs": "^6.0.5",
     "@webgpu/types": "^0.1.74",

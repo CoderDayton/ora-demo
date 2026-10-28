@@ -13,7 +13,7 @@ export const store = {
 };
 
 export type Part =
-  | { type: 'text'; text: string }
+  | { type: 'text'; text: string; voice?: boolean }
   | { type: 'image_url'; image_url: { url: string } }
   | { type: 'input_audio'; input_audio: { data: string; format: string } };
 export interface Msg { role: 'user' | 'assistant' | 'system'; content: string | Part[] }
@@ -21,7 +21,7 @@ export interface Msg { role: 'user' | 'assistant' | 'system'; content: string | 
 export interface ChatInfo { id: number; title: string; created: number; updated: number }
 export interface DocInfo { id: number; chatId: number; name: string; kind: string; pages: number | null; chars: number; chunks: number }
 
-export interface Settings { sys: string; speak: boolean; voice: string; temp: number; maxtok: number; pagepx: number }
+export interface Settings { sys: string; speak: boolean; voice: string; temp: number; maxtok: number; pagepx: number; pause: number }
 export interface Props { modalities?: { vision?: boolean; audio?: boolean; video?: boolean }; default_generation_settings?: { n_ctx?: number } }
 export interface Usage { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
 
@@ -42,11 +42,11 @@ export const S = {
   chatId: null as number | null,
   chats: [] as ChatInfo[],
   docs: [] as DocInfo[],
-  pageSel: store.get<Record<string, string>>('orb.pages', {}),
+  pageSel: store.get<Record<string, string>>('ora.pages', {}),
   set: {
     sys: 'You are a warm, concise voice assistant. Keep replies short and conversational unless asked for detail.',
-    speak: true, voice: 'female', temp: 0.7, maxtok: 1024, pagepx: 1024,
-    ...store.get<Partial<Settings>>('orb.set', {}),
+    speak: true, voice: 'female', temp: 0.7, maxtok: 1024, pagepx: 1024, pause: 900,
+    ...store.get<Partial<Settings>>('ora.set', {}),
   } as Settings,
 };
 
@@ -57,7 +57,7 @@ export const hooks = {
   note: (_text: string, _isErr?: boolean): void => {},
   statusline: (_t: string): void => {},
   stopSpeech: (): void => {},
-  abortChat: (): void => {},
+  abortChat: (): Promise<void> => Promise.resolve(),
 };
 
 export const fmt = (n: number | null | undefined, d = 0): string =>

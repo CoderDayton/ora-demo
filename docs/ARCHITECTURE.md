@@ -6,6 +6,9 @@ How the Ora binary is built and why each choice was made.
 - [PDFs become images](#pdfs-become-images)
 - [Rendering runs in a child process](#rendering-runs-in-a-child-process)
 - [SQLite through FFI](#sqlite-through-ffi)
+- [Voice turns](#voice-turns)
+- [Context](#context)
+- [The web UI](#the-web-ui)
 - [The orb and the persona](#the-orb-and-the-persona)
 - [Invariants](#invariants)
 - [Out of scope](#out-of-scope)
@@ -43,6 +46,41 @@ SQLite 3.54.1 is vendored and compiled in with FTS5. Documents are split into ch
 `porter unicode61` tokenizer, and search results are ranked with bm25. Chats, messages and documents share one
 file, `ora.db`. A document context request takes a `budget` in characters (default 24000, clamped to 1000-400000).
 A chat's documents that fit are sent whole, otherwise the best-ranked chunks are picked until the budget is used.
+
+## Voice turns
+
+Speech is transcribed first. The browser sends the utterance to the model with the system prompt `Perform ASR.`
+at temperature 0, shows the returned words in the user's bubble (with a microphone mark), and stores them as
+text with a `voice` flag. Audio is never kept: later turns, reloads and document search all use the words, and a
+spoken sentence costs tens of tokens instead of thousands. The mic needs a model with audio input.
+
+`src/web/vad.ts` decides when an utterance starts and ends from the microphone level. The pause that ends a turn
+is a setting (default 0.9 s, 0.4 to 2.0 s). While the model is thinking or speaking, speech must be louder and
+last about 250 ms before it counts, which keeps the model's own voice from cutting itself off. When it does count,
+generation and speech stop and the new utterance is taken.
+
+## Context
+
+The saved chat is never cut. Before each reply a copy is trimmed to fit the context size minus the reply length:
+first the images of the oldest messages are replaced by a note (the model's own description of each stays in the
+text), then whole messages from the oldest end, always starting on a user turn and always keeping the newest
+message. `src/web/history.ts` holds this logic. Sizes are estimated from characters and scaled by the ratio between
+the estimate and the prompt size the server reported for the previous reply, so the estimate follows the real
+tokenizer and image cost. Document text and PDF pages are added separately, within their own share of the budget.
+
+## The web UI
+
+The stylesheet (`src/web/style.css`) is written mobile first. The base rules are the phone layout: a slide-over chat
+drawer, a metrics sheet behind a corner button, a settings bottom sheet, 44 px touch targets and 16 px form
+text so iOS does not zoom. One query, `(min-width: 768px) and (min-aspect-ratio: 1/1)`, switches to the desktop
+layout: a floating chat panel, metrics at the right from 1100 px, and a centred conversation. Portrait tablets use
+the phone layout. The Inter variable font is bundled, so the page makes no font requests.
+
+Replies are rendered as Markdown (paragraphs, headings, lists with nested items, quotes, code blocks, bold, italic,
+inline code). `src/web/markdown.ts` turns text into plain data and the page builds elements from it with `textContent`, so model
+output cannot inject HTML. An unfinished marker stays literal until it closes, which keeps streaming stable. While a
+reply streams, `MarkdownStream` keeps the blocks that can no longer change and parses only the tail, so finished
+paragraphs keep their elements and any text selected in them.
 
 ## The orb and the persona
 

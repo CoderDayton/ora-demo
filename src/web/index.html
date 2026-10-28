@@ -2,150 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#111116">
 <title>Ora</title>
-<style>
-:root {
-  color-scheme: dark;
-  --bg:#121216; --glass:rgba(26,27,33,.72); --glass-2:rgba(255,255,255,.04); --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.14);
-  --fg:#e9eaf2; --dim:#8b8fa3; --faint:#5d6074;
-  --ok:#5ee6a8; --warn:#ffb454; --bad:#ff6b6b;
-  --v1:#8b5cf6; --v2:#d946ef; --v3:#60a5fa; --acc:#b69cff;
-  --grad:linear-gradient(135deg,#8b5cf6,#d946ef 60%,#60a5fa);
-  --r:18px;
-}
-* { box-sizing:border-box; }
-html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.5 "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; overflow:hidden; -webkit-font-smoothing:antialiased; }
-body::before { content:""; position:fixed; inset:0; pointer-events:none; z-index:2; mix-blend-mode:screen;
-  background: radial-gradient(65% 60% at 100% 0%, rgba(168,110,255,.55), rgba(120,70,220,.16) 45%, transparent 70%), radial-gradient(45% 40% at 0% 100%, rgba(80,120,255,.10), transparent 70%); }
-canvas#orb { position:fixed; inset:0; width:100%; height:100%; display:block; z-index:1; }
-button, select, textarea, input { font:inherit; color:inherit; }
-button { background:var(--glass-2); border:1px solid var(--line); border-radius:12px; padding:7px 13px; cursor:pointer; transition:border-color .15s, background .15s, transform .05s; }
-button:hover:not(:disabled) { border-color:var(--line-2); background:rgba(255,255,255,.07); }
-button:active:not(:disabled) { transform:scale(.98); }
-button:disabled { opacity:.38; cursor:not-allowed; }
-button.primary { background:linear-gradient(135deg,rgba(139,92,246,.30),rgba(217,70,239,.22)); border-color:rgba(167,139,250,.5); }
-button.danger { background:rgba(255,107,107,.10); border-color:rgba(255,107,107,.35); }
-select, textarea, input[type=number], input:not([type]) { background:rgba(0,0,0,.28); border:1px solid var(--line); border-radius:10px; padding:7px 9px; outline:none; }
-select:focus, textarea:focus, input:focus { border-color:rgba(167,139,250,.55); }
-svg.i { width:18px; height:18px; stroke:currentColor; fill:none; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; flex:none; }
-.glass { background:var(--glass); border:1px solid var(--line); border-radius:var(--r); backdrop-filter:blur(18px) saturate(1.2); -webkit-backdrop-filter:blur(18px) saturate(1.2); box-shadow:0 10px 40px rgba(0,0,0,.35); }
-.label { font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--faint); font-weight:600; }
-::-webkit-scrollbar { width:8px; height:8px; } ::-webkit-scrollbar-thumb { background:rgba(255,255,255,.1); border-radius:8px; }
-
-/* floating chat panel */
-#left { position:fixed; top:14px; left:14px; bottom:14px; width:292px; z-index:6; display:flex; flex-direction:column; gap:10px; transition:transform .25s ease, opacity .2s; }
-#left.collapsed { transform:translateX(-120%); opacity:0; pointer-events:none; }
-#panel { flex:1; min-height:0; display:flex; flex-direction:column; padding:14px 10px 10px; }
-#panel .top { display:flex; align-items:center; justify-content:space-between; padding:0 6px 12px; }
-.brand { display:flex; align-items:center; gap:9px; font-weight:600; font-size:16px; letter-spacing:.01em; }
-.logo { width:26px; height:26px; border-radius:50%; background:conic-gradient(from 210deg,#8b5cf6,#d946ef,#60a5fa,#8b5cf6); box-shadow:0 0 18px rgba(167,110,255,.55); position:relative; }
-.logo::after { content:""; position:absolute; inset:6px; border-radius:50%; background:var(--bg); }
-.iconbtn { padding:6px; border-radius:10px; border-color:transparent; background:none; color:var(--dim); display:grid; place-items:center; }
-.iconbtn:hover:not(:disabled) { color:var(--fg); }
-#newchat { display:flex; align-items:center; justify-content:center; gap:8px; width:100%; padding:10px; border-radius:14px; margin-bottom:12px; background:rgba(139,92,246,.08); border:1px solid rgba(167,139,250,.55); box-shadow:0 0 22px rgba(139,92,246,.18) inset; }
-#newchat:hover { background:rgba(139,92,246,.16); }
-#chatlist { flex:1; min-height:0; overflow-y:auto; padding-right:2px; }
-.grp { margin:14px 8px 4px; }
-.chatrow { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:11px; cursor:pointer; color:var(--dim); }
-.chatrow:hover { background:rgba(255,255,255,.05); color:var(--fg); }
-.chatrow.active { background:rgba(255,255,255,.08); color:var(--fg); }
-.chatrow span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.chatrow button { padding:0 7px; border:none; background:none; color:var(--faint); opacity:0; }
-.chatrow:hover button { opacity:1; } .chatrow button:hover { color:var(--bad); }
-.empty { color:var(--faint); padding:8px 12px; font-size:13px; }
-
-#engine { margin-top:8px; border-top:1px solid var(--line); padding-top:8px; }
-#engine summary { list-style:none; display:flex; align-items:center; gap:9px; padding:8px 8px; cursor:pointer; border-radius:11px; color:var(--dim); }
-#engine summary::-webkit-details-marker { display:none; }
-#engine summary:hover { background:rgba(255,255,255,.05); color:var(--fg); }
-#stext { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
-#dot { width:9px; height:9px; border-radius:50%; background:#555; box-shadow:0 0 9px currentColor; color:#555; flex:none; }
-#dot.ready { background:var(--ok); color:var(--ok); }
-#dot.starting, #dot.stopping { background:var(--warn); color:var(--warn); animation:blink 1s infinite; }
-#dot.error { background:var(--bad); color:var(--bad); }
-@keyframes blink { 50% { opacity:.3; } }
-#engine .body { padding:6px 4px 4px; display:flex; flex-direction:column; gap:7px; }
-#engine .row { display:flex; gap:7px; align-items:center; }
-#engine .row > * { flex:1; min-width:0; }
-#engine label { font-size:12px; color:var(--dim); flex:0 0 auto; display:flex; gap:6px; align-items:center; }
-#logs { display:none; max-height:140px; overflow:auto; font:11px/1.35 ui-monospace, monospace; color:var(--dim); white-space:pre-wrap; background:rgba(0,0,0,.3); border-radius:10px; padding:7px; }
-#logs.show { display:block; }
-#reopen { position:fixed; top:16px; left:16px; z-index:6; display:none; padding:9px; border-radius:13px; background:var(--glass); backdrop-filter:blur(14px); }
-#left.collapsed ~ #reopen { display:grid; }
-
-/* metrics */
-#metrics { position:fixed; top:14px; right:14px; width:236px; padding:12px 14px; z-index:5; }
-#metrics .head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
-#badges { display:flex; gap:6px; margin-bottom:9px; }
-.badge { font-size:11px; padding:1px 9px; border-radius:99px; border:1px solid var(--line); color:var(--faint); }
-.badge.on { color:var(--ok); border-color:rgba(94,230,168,.4); background:rgba(94,230,168,.07); }
-#metrics .grid { display:grid; grid-template-columns:1fr auto; gap:4px 12px; font-size:12px; }
-#metrics.min .grid, #metrics.min #badges { display:none; }
-#metrics .k { color:var(--dim); } #metrics .v { text-align:right; font-variant-numeric:tabular-nums; }
-
-/* hero */
-#hero { position:fixed; left:0; right:0; top:57%; z-index:3; display:flex; flex-direction:column; align-items:center; text-align:center; padding:0 18px; pointer-events:none; transition:opacity .25s, transform .25s; }
-body.chatting #hero { opacity:0; transform:translateY(10px); }
-#hero .kicker { color:var(--dim); font-size:clamp(16px,2vw,22px); font-weight:300; margin-bottom:4px; }
-#hero h1 { margin:0 0 22px; font-weight:400; font-size:clamp(28px,4.4vw,54px); letter-spacing:-.02em; line-height:1.08; background:linear-gradient(180deg,#fff,#b9bbd0); -webkit-background-clip:text; background-clip:text; color:transparent; }
-#cards { display:flex; gap:12px; flex-wrap:wrap; justify-content:center; }
-#cards button { pointer-events:auto; width:218px; min-height:92px; text-align:left; padding:14px 15px; border-radius:18px; display:flex; flex-direction:column; justify-content:space-between; gap:12px; color:var(--dim); background:var(--glass); backdrop-filter:blur(12px); }
-#cards button:hover { color:var(--fg); border-color:rgba(167,139,250,.5); }
-#cards .svgrow { color:var(--faint); }
-
-/* stage */
-#stage { position:fixed; left:0; right:0; bottom:0; display:flex; flex-direction:column; align-items:center; padding:0 18px 18px; z-index:4; pointer-events:none; }
-#stage > * { pointer-events:auto; width:min(780px,100%); }
-#statusline { text-align:center; color:var(--dim); font-size:12px; letter-spacing:.06em; min-height:18px; margin-bottom:6px; pointer-events:none; }
-#log { max-height:40vh; overflow-y:auto; padding:6px 2px; -webkit-mask-image:linear-gradient(transparent, #000 26px); mask-image:linear-gradient(transparent, #000 26px); }
-.msg { margin:8px 0; padding:10px 14px; border-radius:16px; white-space:pre-wrap; word-wrap:break-word; max-width:86%; width:fit-content; }
-.msg.assistant { background:var(--glass); border:1px solid var(--line); backdrop-filter:blur(14px); }
-.msg.user { margin-left:auto; background:linear-gradient(135deg,rgba(139,92,246,.30),rgba(96,165,250,.20)); border:1px solid rgba(167,139,250,.38); }
-.msg.err { border-color:var(--bad); color:var(--bad); }
-.msg.note { margin:6px auto; background:none; border:none; color:var(--dim); font-size:12px; text-align:center; backdrop-filter:none; }
-.msg img { display:block; max-width:200px; max-height:150px; border-radius:10px; margin-bottom:6px; }
-
-#composer { margin-top:10px; padding:2px; border-radius:22px; border:1px solid transparent; position:relative;
-  background:linear-gradient(var(--bg),var(--bg)) padding-box, linear-gradient(135deg,rgba(167,139,250,.9),rgba(217,70,239,.35) 45%,rgba(96,165,250,.75)) border-box;
-  box-shadow:0 0 38px rgba(139,92,246,.22), 0 14px 40px rgba(0,0,0,.45); }
-#composer .inner { background:rgba(24,25,31,.92); border-radius:20px; padding:10px 12px 10px; display:flex; flex-direction:column; gap:8px; }
-#attached, #docs { display:none; gap:8px; flex-wrap:wrap; }
-#attached.show, #docs.show { display:flex; }
-#attached .th { position:relative; }
-#attached img { height:52px; border-radius:9px; display:block; border:1px solid var(--line); }
-#attached .th button { position:absolute; top:-7px; right:-7px; padding:0 6px; border-radius:99px; font-size:11px; background:var(--bg); }
-.doc { display:flex; align-items:center; gap:7px; background:var(--glass-2); border:1px solid var(--line); border-radius:11px; padding:3px 4px 3px 10px; font-size:12px; }
-.doc span { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--dim); }
-.doc input { width:72px; padding:2px 6px; font-size:12px; border-radius:8px; }
-.doc button { padding:0 7px; border:none; background:none; color:var(--faint); }
-.doc button:hover { color:var(--bad); }
-#input { width:100%; resize:none; max-height:140px; min-height:30px; background:none; border:none; padding:4px 4px; font-size:15px; line-height:1.5; }
-#input:focus { border:none; }
-#input::placeholder { color:var(--faint); }
-#composer .bar { display:flex; align-items:center; gap:4px; }
-#composer .bar .sp { flex:1; }
-#composer .tool { display:grid; place-items:center; padding:8px; border-radius:12px; border-color:transparent; background:none; color:var(--dim); }
-#composer .tool:hover:not(:disabled) { color:var(--fg); background:rgba(255,255,255,.07); }
-#mic.live { color:var(--ok); background:rgba(94,230,168,.12); box-shadow:0 0 16px rgba(94,230,168,.25); }
-#send { display:grid; place-items:center; width:38px; height:38px; padding:0; border-radius:12px; background:var(--grad); border:none; color:#fff; box-shadow:0 0 20px rgba(139,92,246,.45); }
-#send:hover:not(:disabled) { filter:brightness(1.12); }
-#send .stopi { display:none; } #send.stop .sendi { display:none; } #send.stop .stopi { display:block; }
-#opts { display:none; position:absolute; right:0; bottom:calc(100% + 12px); width:min(420px,100%); padding:14px; gap:10px; flex-direction:column; font-size:12.5px; color:var(--dim); z-index:8; }
-#opts.show { display:flex; }
-#opts textarea { width:100%; min-height:64px; resize:vertical; }
-#opts .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; }
-#opts label { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-#opts input[type=number], #opts select { width:96px; }
-
-@media (max-width:860px) {
-  #left { width:calc(100% - 28px); bottom:auto; max-height:70vh; }
-  #metrics { display:none; }
-  #hero { top:50%; } #cards button { width:calc(50% - 8px); }
-}
-</style>
 </head>
-<body>
+<body class="no-anim">
 <canvas id="orb"></canvas>
 
 <aside id="left">
@@ -176,8 +37,10 @@ body.chatting #hero { opacity:0; transform:translateY(10px); }
     </details>
   </section>
 </aside>
+<div id="scrim"></div>
 <button id="reopen" class="iconbtn" title="show panel"><svg class="i" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M9.5 4.5v15M13 10l2 2-2 2"/></svg></button>
 
+<button id="mshow" class="iconbtn" title="metrics"><svg class="i" viewBox="0 0 24 24"><path d="M5 20V10M12 20V4M19 20v-7"/></svg></button>
 <section id="metrics" class="glass">
   <div class="head"><span class="label">Metrics</span><button class="iconbtn" id="mtoggle" title="collapse"><svg class="i" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button></div>
   <div id="badges"><span class="badge" data-m="audio">audio</span><span class="badge" data-m="vision">vision</span><span class="badge" data-m="video">video</span></div>
@@ -198,21 +61,30 @@ body.chatting #hero { opacity:0; transform:translateY(10px); }
   <div id="statusline"></div>
   <div id="log"></div>
   <div id="composer">
-    <div id="opts" class="glass">
-      <textarea id="sys" placeholder="System prompt"></textarea>
-      <div class="grid2">
-        <label>speak replies <input type="checkbox" id="speak" checked></label>
-        <label>voice <select id="voice"><option>female</option><option>male</option></select></label>
-        <label>temp <input type="number" id="temp" min="0" max="2" step="0.1" value="0.7"></label>
-        <label>max tokens <input type="number" id="maxtok" min="32" max="8192" step="32" value="1024"></label>
+    <div id="opts" class="glass" role="dialog" aria-label="Settings">
+      <div class="ohead"><span class="label">Settings</span><button class="iconbtn" id="optsclose" title="close"><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <section>
+        <h4>Voice</h4>
+        <label>Speak replies <input type="checkbox" id="speak" checked></label>
+        <label>Voice <select id="voice"><option>female</option><option>male</option></select></label>
+        <label>Wait after you stop <span class="range"><input type="range" id="pause" min="400" max="2000" step="100"><output id="pause-v"></output></span></label>
+      </section>
+      <section>
+        <h4>Model</h4>
+        <label>Temperature <span class="range"><input type="range" id="temp" min="0" max="2" step="0.1"><output id="temp-v"></output></span></label>
+        <label>Max tokens <input type="number" id="maxtok" min="32" max="8192" step="32" value="1024"></label>
+        <textarea id="sys" placeholder="System prompt"></textarea>
+      </section>
+      <section>
+        <h4>Documents</h4>
         <label>PDF page size <select id="pagepx"><option value="1024">1024 px</option><option value="1536">1536 px</option><option value="2048">2048 px</option></select></label>
-        <button id="clear">New chat</button>
-      </div>
+      </section>
+      <button id="clear">New chat</button>
     </div>
     <div class="inner">
       <div id="docs"></div>
       <div id="attached"></div>
-      <textarea id="input" rows="1" placeholder="Ask anything, paste an image, drop a document, or tap the mic..."></textarea>
+      <textarea id="input" rows="1" placeholder="Ask anything, or tap the mic"></textarea>
       <div class="bar">
         <button class="tool" id="attach" title="attach image"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="4.5" width="16" height="15" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="M5 17l4.5-4.5 3.5 3.5 2-2L19 17"/></svg></button>
         <button class="tool" id="docbtn" title="upload a PDF or text document to this chat"><svg class="i" viewBox="0 0 24 24"><path d="M20 11.5l-7.8 7.8a4.5 4.5 0 0 1-6.4-6.4l8.2-8.2a3 3 0 0 1 4.2 4.2l-8.1 8.1a1.5 1.5 0 0 1-2.1-2.1l7.4-7.4"/></svg></button>

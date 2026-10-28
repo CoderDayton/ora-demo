@@ -9,6 +9,9 @@ A local voice, image and document chat app for GGUF models, with an orb that rea
 
 </div>
 
+**Ora is a demo, not a product.** It shows what the model behind Lune Voice can do: voice, images and documents in
+one chat. It has no release process, support or compatibility promises, and you build it yourself.
+
 Ora is one native program that serves a web UI on localhost, keeps chats and documents in SQLite, starts and
 stops [`llama-server`](https://github.com/ggml-org/llama.cpp) for you, and renders PDFs to page images for vision
 models. Nothing is installed beside it: the web app, SQLite and the PDF renderer are inside the binary (12.5 MB,
@@ -64,6 +67,7 @@ a 2B model: printed numbers are read well, values estimated from an unlabelled c
 
 | Situation | Use instead | Why |
 |---|---|---|
+| You want a product you can depend on | A maintained chat app | Ora is a demo of the model and may change or break. |
 | You want a hosted or multi-user service | A hosted chat product | Ora serves one user on localhost and has no accounts or TLS. |
 | You need a prebuilt binary | A release of llama.cpp's own web UI | Ora is built from source. |
 | Your model has no vision support and you need PDF text | A text-extraction tool | Ora sends PDF pages as images and never extracts text. |

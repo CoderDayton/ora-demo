@@ -1,7 +1,7 @@
 // Ora controller: serves the web app, owns chats/documents (SQLite), starts/stops llama-server and proxies /llama/*.
 // Local only: binds 127.0.0.1 and rejects foreign Host/Origin headers.
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { createServer, request } from 'node:http';
+import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import { ASSETS } from './assets.gen.ts';
@@ -10,6 +10,7 @@ import { configPath, loadConfig } from './config.ts';
 import { chunkText, extractDoc, isPdf, isolatePdfRendering, renderPdf } from './docs.ts';
 import { Engine, prepareModelsDir, scanModels } from './engine.ts';
 import { renderWorker } from './pdfium.ts';
+import { proxy } from './proxy.ts';
 import { openStore } from './store.ts';
 
 // Child mode: PDFium parses untrusted files, so uploads are rendered by this same binary in a separate process.
@@ -85,28 +86,6 @@ async function readJson(req: IncomingMessage, limit: number): Promise<Record<str
   }
   if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new HttpError(400, 'expected a JSON object');
   return v as Record<string, unknown>;
-}
-
-function proxy(req: IncomingMessage, res: ServerResponse): void {
-  const fwd: Record<string, string> = {};
-  for (const k of Object.keys(req.headers)) {
-    const v = req.headers[k];
-    if (typeof v === 'string' && k !== 'host' && k !== 'origin' && k !== 'referer') fwd[k] = v;
-  }
-  fwd.host = `127.0.0.1:${LLAMA_PORT}`;
-  const up = request({
-    host: '127.0.0.1', port: LLAMA_PORT, method: req.method, headers: fwd,
-    path: (req.url ?? '/').replace(/^\/llama/, '') || '/',
-  }, r => {
-    res.writeHead(r.statusCode ?? 502, r.headers);
-    r.pipe(res);
-  });
-  up.on('error', () => {
-    if (!res.headersSent) res.writeHead(502, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ error: { message: 'llama-server is not reachable' } }));
-  });
-  res.on('close', () => up.destroy());
-  req.pipe(up);
 }
 
 function serveStatic(pathname: string, res: ServerResponse): void {
@@ -230,7 +209,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://x');
   const p = url.pathname;
 
-  if (p === '/llama' || p.startsWith('/llama/')) return proxy(req, res);
+  if (p === '/llama' || p.startsWith('/llama/')) return proxy(req, res, LLAMA_PORT);
   if (!p.startsWith('/api/')) {
     if (method !== 'GET') throw new HttpError(405, 'method not allowed');
     return serveStatic(p, res);

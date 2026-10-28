@@ -27,8 +27,15 @@ const parts: Particle[] = Array.from({ length: 150 }, () => ({ a: Math.random() 
 let W = 0, H = 0, dpr = 1, last = performance.now(), flash = 0;
 
 // Orb centre height and size as fractions of the viewport; leaves room for the welcome text below it.
-const ORB_Y = 0.33;
-const ORB_R = 0.13;
+const wide = matchMedia('(min-width: 768px) and (min-aspect-ratio: 1/1)');
+let dock = 0;
+// Orb centre as a fraction of the height and radius as a fraction of the short side. Once a conversation starts the
+// orb shrinks toward the top edge, which leaves the screen to the messages.
+function place(w: number, h: number): { y: number; r: number } {
+  if (wide.matches) return { y: 0.33 - 0.12 * dock, r: 0.13 - 0.035 * dock };
+  const r0 = Math.min(0.2, (0.11 * h) / Math.min(w, h));
+  return { y: 0.26 - 0.145 * dock, r: r0 - (r0 - 0.1) * dock };
+}
 
 function resize(): void {
   if (gpu) return;
@@ -43,7 +50,7 @@ resize();
 addEventListener('pointermove', ev => {
   O.pointer = {
     x: (ev.clientX - innerWidth / 2) / (innerWidth / 2),
-    y: -(ev.clientY - innerHeight * ORB_Y) / (innerHeight / 2),
+    y: -(ev.clientY - innerHeight * place(innerWidth, innerHeight).y) / (innerHeight / 2),
   };
 });
 document.addEventListener('pointerleave', () => { O.pointer = null; });
@@ -91,6 +98,7 @@ function frame(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   const t = now / 1000;
+  dock += ((document.body.classList.contains('chatting') ? 1 : 0) - dock) * (1 - Math.exp(-dt * 6));
   const k = 1 - Math.exp(-dt * 5);
   const T = targets();
   look = persona.update(dt, O, t);
@@ -107,8 +115,8 @@ function frame(now: number): void {
     const ages = [0, 0, 0, 0], strs = [0, 0, 0, 0];
     ripples.slice(-4).forEach((rp, i) => { ages[i] = (now - rp.t0) / 1000; strs[i] = rp.s; });
     gpu.draw({
-      res: [gw, gh], center: [gw / 2, gh * ORB_Y], time: t,
-      radius: Math.min(gw, gh) * ORB_R * (1 + 0.04 * Math.sin(t * 1.3) + O.energy * 0.12 + O.pulse * 0.1),
+      res: [gw, gh], center: [gw / 2, gh * place(gw, gh).y], time: t,
+      radius: Math.min(gw, gh) * place(gw, gh).r * (1 + 0.04 * Math.sin(t * 1.3) + O.energy * 0.12 + O.pulse * 0.1),
       energy: O.energy, hue: O.hue, sat: O.sat, pulse: O.pulse, spin: O.spin,
       ctx: O.ctx, kv: O.kv, rate: O.rate, inward: (O.mode === 'prefill' || O.mode === 'boot') ? 1 : 0,
       ages, strs,
@@ -124,8 +132,9 @@ function frame(now: number): void {
   g.fillStyle = 'rgba(7,8,13,0.3)';
   g.fillRect(0, 0, W, H);
 
-  const cx = W / 2, cy = H * ORB_Y;
-  const base = Math.min(W, H) * ORB_R;
+  const pl = place(W, H);
+  const cx = W / 2, cy = H * pl.y;
+  const base = Math.min(W, H) * pl.r;
   const R = base * (1 + 0.04 * Math.sin(t * 1.3) + O.energy * 0.12 + O.pulse * 0.1);
   const amp = 0.05 + 0.24 * O.energy;
 

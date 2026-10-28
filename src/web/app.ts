@@ -1,10 +1,14 @@
 import { IMG_TOKENS, docPayload, newChat, persist, renderDocs, restoreLastChat, uploadDocs } from './chats.ts';
+import { calibrate, estTokens, fitHistory, toApi } from './history.ts';
+import { MarkdownStream } from './markdown.ts';
+import type { Block, Inline, ListItem } from './markdown.ts';
 import { Orb } from './orb.ts';
 import { $, L, S, api, fmt, hooks, store } from './state.ts';
+import { Vad } from './vad.ts';
 import type { Msg, Part, Props, Usage } from './state.ts';
 
 interface ModelRow { path: string; name: string; sizeMB: number; mmproj: string[] }
-interface EngineStatus { state: string; model: string | null; exit: string | null; logs: string[] }
+interface EngineStatus { state: string; model: string | null; exit: string | null; logs: string[]; args?: string[] }
 interface Timings { predicted_per_second?: number; prompt_per_second?: number }
 interface StreamChunk {
   choices?: { delta?: { content?: string; reasoning_content?: string; tool_calls?: unknown[] } }[];
@@ -59,7 +63,7 @@ function showCtx(): void {
 }
 
 /* ---------- engine control ---------- */
-const E = { models: [] as ModelRow[], last: '' };
+const E = { models: [] as ModelRow[], last: '', synced: '' };
 
 // File names come from disk, so options are built as DOM nodes and never parsed as HTML.
 function setOptions(sel: HTMLSelectElement, rows: { value: string; label: string }[]): void {
@@ -93,7 +97,23 @@ async function loadModels(): Promise<void> {
 }
 $<HTMLSelectElement>('#model').onchange = () => { store.set('ora.model', $<HTMLSelectElement>('#model').value); fillMmproj(); };
 
+// After a page reload the dropdowns show what is actually running, not the last saved choice.
+function syncSelection(st: EngineStatus): void {
+  if (!st.model || (st.state !== 'ready' && st.state !== 'starting') || E.synced === st.model) return;
+  const m = E.models.find(x => x.name === st.model);
+  if (!m) return;
+  E.synced = st.model;
+  $<HTMLSelectElement>('#model').value = m.path;
+  store.set('ora.model', m.path);
+  fillMmproj();
+  const i = st.args?.indexOf('--mmproj') ?? -1;
+  const proj = i >= 0 ? (st.args?.[i + 1] ?? '') : '';
+  const sel = $<HTMLSelectElement>('#mmproj');
+  if ([...sel.options].some(o => o.value === proj)) sel.value = proj;
+}
+
 function applyEngine(st: EngineStatus): void {
+  syncSelection(st);
   S.engine = st.state;
   $('#dot').className = st.state;
   $('#stext').textContent = st.state === 'ready' ? `ready - ${st.model}` : st.state === 'error' ? `error (${st.exit ?? '?'})` : st.state;
@@ -147,10 +167,70 @@ $('#logbtn').onclick = () => $('#logs').classList.toggle('show');
 /* ---------- transcript ---------- */
 const logEl = $('#log');
 const scrollEnd = (): void => { logEl.scrollTop = logEl.scrollHeight; };
+// Replies are shown as Markdown. The parser returns data and elements are built with textContent, so model
+// output can never inject markup.
+const inlineNodes = (parts: Inline[]): Node[] => parts.map(p => {
+  if (p.t === 'text') return document.createTextNode(p.v);
+  const e = document.createElement(p.t === 'code' ? 'code' : p.t === 'strong' ? 'strong' : 'em');
+  e.textContent = p.v;
+  return e;
+});
+function itemEl(it: ListItem): HTMLElement {
+  const li = document.createElement('li');
+  li.append(...inlineNodes(it.c));
+  if (it.sub) li.append(...it.sub.map(blockEl));
+  return li;
+}
+function blockEl(b: Block): HTMLElement {
+  if (b.t === 'code') {
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    code.textContent = b.v;
+    pre.appendChild(code);
+    return pre;
+  }
+  if (b.t === 'ul' || b.t === 'ol') {
+    const list = document.createElement(b.t);
+    for (const it of b.items) list.appendChild(itemEl(it));
+    if (b.t === 'ol' && b.start !== 1) (list as HTMLOListElement).start = b.start;
+    return list;
+  }
+  const e = document.createElement(b.t === 'h' ? `h${b.n}` : b.t === 'quote' ? 'blockquote' : 'p');
+  e.append(...inlineNodes(b.c));
+  return e;
+}
+// Each message keeps its own stream parser, so a growing reply rebuilds only the blocks that can still change and
+// the finished ones keep their nodes (and any text selection in them).
+const streams = new WeakMap<HTMLElement, MarkdownStream>();
+const rendered = new WeakMap<HTMLElement, number>();
+function mdInto(el: HTMLElement, text: string): void {
+  el.classList.add('md');
+  let stream = streams.get(el);
+  if (!stream) { stream = new MarkdownStream(); streams.set(el, stream); }
+  const { blocks, changedFrom } = stream.update(text);
+  const keep = el.childNodes.length === (rendered.get(el) ?? 0) ? Math.min(changedFrom, el.childNodes.length) : 0;
+  if (!keep) el.replaceChildren();
+  rendered.set(el, blocks.length);
+  while (el.childNodes.length > keep) (el.lastChild as ChildNode).remove();
+  el.append(...blocks.slice(keep).map(blockEl));
+}
+// While a reply streams it is re-rendered at most every 120 ms, and the view follows it only if the reader is at the bottom.
+let mdTimer = 0;
+const nearBottom = (): boolean => logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 80;
+function mdSoon(el: HTMLElement, getText: () => string): void {
+  if (mdTimer) return;
+  mdTimer = window.setTimeout(() => {
+    mdTimer = 0;
+    const follow = nearBottom();
+    mdInto(el, getText());
+    if (follow) scrollEnd();
+  }, 120);
+}
+
 function addMsg(role: string, text: string, cls = ''): HTMLElement {
   const d = document.createElement('div');
   d.className = `msg ${role} ${cls}`.trim();
-  d.textContent = text;
+  if (role === 'assistant' && text) mdInto(d, text); else d.textContent = text;
   logEl.appendChild(d);
   scrollEnd();
   return d;
@@ -165,32 +245,23 @@ function renderLog(): void {
     for (const p of m.content) {
       if (p.type === 'image_url') { const im = new Image(); im.src = p.image_url.url; d.prepend(im); }
       else if (p.type === 'input_audio') d.appendChild(document.createTextNode('(voice message) '));
-      else d.appendChild(document.createTextNode(p.text));
+      else {
+        d.appendChild(document.createTextNode(p.text));
+        if (p.voice) d.classList.add('voice');
+      }
     }
   }
 }
 const statusline = (t: string): void => { $('#statusline').textContent = t; };
 
 /* ---------- context budget ---------- */
-function estTokens(m: Msg): number {
-  if (typeof m.content === 'string') return Math.ceil(m.content.length / CHARS_PER_TOKEN) + 6;
-  let n = 6;
-  for (const p of m.content) {
-    n += p.type === 'text' ? Math.ceil(p.text.length / CHARS_PER_TOKEN)
-      : p.type === 'input_audio' ? Math.ceil(p.input_audio.data.length / 3300) : IMG_TOKENS;
-  }
-  return n;
-}
-
-// The saved history is never cut; only the copy sent to the model is trimmed from the oldest end.
-function fitHistory(hist: Msg[], budget: number): { msgs: Msg[]; dropped: number } {
-  const msgs = hist.slice();
-  let tot = msgs.reduce((a, m) => a + estTokens(m), 0);
-  let dropped = 0;
-  while (msgs.length > 1 && tot > budget) { tot -= estTokens(msgs.shift() as Msg); dropped++; }
-  while (msgs.length > 1 && (msgs[0] as Msg).role !== 'user') { msgs.shift(); dropped++; }
-  return { msgs, dropped };
-}
+// The saved history is never cut; only the copy sent to the model is trimmed. The character-based estimate is
+// scaled by what the server reported for the last reply, so it follows the real tokenizer and image cost.
+let costScale = 1;
+let lastTrim = '';
+let transcribing = false;
+const cost = (): { charsPerToken: number; imageTokens: number; scale: number } =>
+  ({ charsPerToken: CHARS_PER_TOKEN, imageTokens: IMG_TOKENS, scale: costScale });
 
 /* ---------- audio out (tts) ---------- */
 let _ac: AudioContext | null = null;
@@ -267,12 +338,26 @@ function ttsStop(): void {
 }
 
 /* ---------- chat ---------- */
-function userContent(text: string, imgs: string[], audio?: string): string | Part[] {
-  if (!imgs.length && !audio) return text;
+// A voice turn is stored as its transcript (flagged so the UI can show it was spoken), never as audio:
+// the words are what later turns, reloads and document search need, and audio would swamp the context.
+function userContent(text: string, imgs: string[], voice = false): string | Part[] {
+  if (!imgs.length && !voice) return text;
   const parts: Part[] = imgs.map(u => ({ type: 'image_url', image_url: { url: u } }));
-  if (audio) parts.push({ type: 'input_audio', input_audio: { data: audio, format: 'wav' } });
-  if (text) parts.push({ type: 'text', text });
+  parts.push(voice ? { type: 'text', text, voice: true } : { type: 'text', text });
   return parts;
+}
+
+async function transcribe(audio: string, signal: AbortSignal): Promise<string> {
+  const res = await fetch(`${L}/v1/chat/completions`, {
+    method: 'POST', signal, headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      messages: [{ role: 'system', content: 'Perform ASR.' }, { role: 'user', content: [{ type: 'input_audio', input_audio: { data: audio, format: 'wav' } }] }],
+      temperature: 0, max_tokens: 400,
+    }),
+  });
+  if (!res.ok) throw new Error(`transcription failed (${res.status})`);
+  const j = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  return (j.choices?.[0]?.message?.content ?? '').trim();
 }
 
 // The persona's memory lives on the server so it survives browser data clears.
@@ -308,21 +393,51 @@ function lastUserText(): string {
   return '';
 }
 
+// Resolves when the running turn has finished, including its saves; switching chats waits for it so a cut-off
+// reply is stored in the chat it belongs to.
+let inflight: Promise<void> = Promise.resolve();
 async function send(text: string, opts: { audio?: string } = {}): Promise<void> {
   text = text.trim();
   if ((!text && !S.pending.length && !opts.audio) || S.busy || S.engine !== 'ready') return;
+  let finish = (): void => undefined;
+  inflight = new Promise<void>(r => { finish = r; });
+  try { await turn(text, opts); } finally { await saveChain; finish(); }
+}
+
+async function turn(text: string, opts: { audio?: string }): Promise<void> {
   ttsStop();
+  let voice = false;
+  if (opts.audio) {
+    S.busy = true;
+    transcribing = true;
+    Orb.event({ type: 'user_voice' });
+    Orb.setMode('prefill');
+    statusline('transcribing...');
+    const pending = addMsg('user', 'transcribing...', 'voice pending');
+    const tctl = new AbortController();
+    S.abort = tctl;
+    try { text = await transcribe(opts.audio, tctl.signal); } catch (e) {
+      if (!(e instanceof DOMException && e.name === 'AbortError')) note(e instanceof Error ? e.message : String(e), true);
+      text = '';
+    }
+    S.abort = null;
+    pending.remove();
+    transcribing = false;
+    S.busy = false;
+    if (!text) { afterTurn(); return; }
+    voice = true;
+  }
   const imgs = S.pending;
   S.pending = [];
   renderPending();
-  const um: Msg = { role: 'user', content: userContent(text || (opts.audio ? '' : 'Describe this image.'), imgs, opts.audio) };
+  const um: Msg = { role: 'user', content: userContent(text || 'Describe this image.', imgs, voice) };
   S.hist.push(um);
   save(um, text);
   renderLog();
   Orb.state.typing = false;
   if (imgs.length) Orb.event({ type: 'user_image' });
-  if (opts.audio) Orb.event({ type: 'user_voice' });
 
+  S.usage = null;
   const bubble = addMsg('assistant', '');
   const ctl = new AbortController();
   S.abort = ctl;
@@ -331,19 +446,24 @@ async function send(text: string, opts: { audio?: string } = {}): Promise<void> 
   Orb.setMode('prefill');
   statusline('reading...');
   const t0 = performance.now();
-  let tFirst = 0, n = 0, acc = '';
+  let tFirst = 0, n = 0, acc = '', estSent = 0, fixedTokens = 0;
   let timings: Timings | null = null;
   try {
     const dp = await docPayload(text || lastUserText());
     if (dp.note) note(dp.note);
     const sysText = S.set.sys + dp.system;
-    const budget = S.nctx - S.set.maxtok - Math.ceil(sysText.length / CHARS_PER_TOKEN) - dp.tokens - 64;
-    const { msgs, dropped } = fitHistory(S.hist, S.nctx ? budget : Infinity);
-    if (dropped) note(`context full: ${dropped} oldest messages not sent`);
+    const sysTokens = Math.ceil((sysText.length / CHARS_PER_TOKEN) * costScale);
+    const budget = S.nctx - S.set.maxtok - sysTokens - dp.pageTokens - 64;
+    const { msgs, dropped, stripped } = fitHistory(S.hist, S.nctx ? budget : Infinity, cost());
+    const trim = dropped || stripped ? `${dropped}/${stripped}` : '';
+    if (trim && trim !== lastTrim) note(`context full: ${stripped ? `${stripped} older image(s) and ` : ''}${dropped} oldest message(s) left out of this reply`);
+    lastTrim = trim;
+    fixedTokens = dp.pageTokens;
+    estSent = sysTokens + msgs.reduce((a, m) => a + estTokens(m, cost()), 0);
     const res = await fetch(`${L}/v1/chat/completions`, {
       method: 'POST', signal: ctl.signal, headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        messages: [{ role: 'system', content: sysText }, ...dp.lead, ...msgs],
+        messages: [{ role: 'system', content: sysText }, ...toApi(dp.lead), ...toApi(msgs)],
         stream: true, stream_options: { include_usage: true }, temperature: S.set.temp, max_tokens: S.set.maxtok,
       }),
     });
@@ -360,7 +480,7 @@ async function send(text: string, opts: { audio?: string } = {}): Promise<void> 
       if (dl.content) {
         Orb.state.thinking = false;
         acc += dl.content; n++;
-        bubble.textContent = acc; scrollEnd();
+        mdSoon(bubble, () => acc);
         Orb.pulse(0.3);
         ttsFeed(dl.content);
       }
@@ -391,17 +511,26 @@ async function send(text: string, opts: { audio?: string } = {}): Promise<void> 
     }
   } catch (e) {
     if (!(e instanceof DOMException && e.name === 'AbortError')) {
-      bubble.classList.add('err');
-      bubble.textContent = `error: ${e instanceof Error ? e.message : String(e)}`;
-      Orb.error();
+      const msg = `error: ${e instanceof Error ? e.message : String(e)}`;
+      if (acc) note(msg, true);
+      else { bubble.classList.add('err'); bubble.textContent = msg; Orb.error(); }
     }
   } finally {
     if (acc) {
+      clearTimeout(mdTimer);
+      mdTimer = 0;
+      mdInto(bubble, acc);
+      scrollEnd();
       const am: Msg = { role: 'assistant', content: acc };
       S.hist.push(am);
       save(am);
     } else if (!bubble.classList.contains('err')) bubble.remove();
-    if (S.usage) { S.totals.in += S.usage.prompt_tokens ?? 0; S.totals.out += S.usage.completion_tokens ?? 0; }
+    const usage = S.usage as Usage | null;
+    if (usage) {
+      S.totals.in += usage.prompt_tokens ?? 0;
+      S.totals.out += usage.completion_tokens ?? 0;
+      costScale = calibrate(costScale, estSent, Math.max(0, (usage.prompt_tokens ?? 0) - fixedTokens));
+    }
     const tm = timings as Timings | null;
     if (tm) { setM('gen', fmt(tm.predicted_per_second)); setM('pp', fmt(tm.prompt_per_second)); }
     Orb.state.thinking = false;
@@ -448,46 +577,46 @@ function wavB64(f: Float32Array, rate: number): string {
   return btoa(bin);
 }
 
-const M = {
-  stream: null as MediaStream | null, src: null as MediaStreamAudioSourceNode | null, proc: null as ScriptProcessorNode | null,
-  rec: false, buf: [] as Float32Array[], pre: [] as Float32Array[], floor: 0.005, startN: 0, lastVoice: 0, t0: 0,
-};
+const vad = new Vad({ silenceMs: S.set.pause });
+const M = { stream: null as MediaStream | null, src: null as MediaStreamAudioSourceNode | null, proc: null as ScriptProcessorNode | null, buf: [] as Float32Array[], pre: [] as Float32Array[] };
 function afterTurn(): void {
   Orb.setMode(S.handsfree ? 'listening' : S.engine === 'ready' ? 'idle' : 'off');
   statusline(S.handsfree ? 'listening...' : '');
 }
-function vad(x: Float32Array): void {
+// Speaking while the orb is thinking or talking stops it and takes the new utterance.
+function interrupt(): void {
+  S.abort?.abort();
+  ttsStop();
+}
+function onFrame(x: Float32Array): void {
   let s = 0;
   for (let i = 0; i < x.length; i++) s += (x[i] as number) * (x[i] as number);
   const rms = Math.sqrt(s / x.length);
   Orb.state.mic = rms;
-  if (S.busy || T.playing || S.engine !== 'ready') { M.rec = false; M.buf = []; M.pre = []; M.startN = 0; return; }
-  if (!M.rec) M.floor = M.floor * 0.97 + Math.min(rms, M.floor * 3 + 0.002) * 0.03;
-  const th = Math.max(0.015, M.floor * 4), now = performance.now();
-  if (!M.rec) {
-    M.pre.push(x);
-    if (M.pre.length > 8) M.pre.shift();
-    if (rms > th) {
-      if (++M.startN >= 2) { M.rec = true; M.buf = [...M.pre]; M.lastVoice = now; M.t0 = now; Orb.setMode('listening'); statusline('hearing you...'); }
-    } else M.startN = 0;
-  } else {
-    M.buf.push(x);
-    if (rms > th * 0.6) M.lastVoice = now;
-    if (now - M.lastVoice > 900 || now - M.t0 > 30000) finishUtterance();
-  }
+  if (S.engine !== 'ready' || transcribing) { vad.reset(); M.buf = []; M.pre = []; return; }
+  if (!vad.recording) { M.pre.push(x); if (M.pre.length > 8) M.pre.shift(); }
+  const ev = vad.push(rms, performance.now(), T.playing || S.busy);
+  if (ev === 'start' || ev === 'barge') {
+    if (S.busy || T.playing) interrupt();
+    M.buf = [...M.pre];
+    Orb.setMode('listening');
+    statusline('hearing you...');
+  } else if (vad.recording) M.buf.push(x);
+  if (ev === 'end') finishUtterance();
 }
-// The audio goes to the model as-is, together with any attached image, so it hears and sees in one turn.
+// The audio is transcribed first, so the words are shown and kept; see send().
 function finishUtterance(): void {
   const chunks = M.buf;
-  M.rec = false; M.buf = []; M.pre = []; M.startN = 0;
+  M.buf = []; M.pre = [];
   const len = chunks.reduce((a, c) => a + c.length, 0), rate = ac().sampleRate;
-  if (len / rate < 0.5) return;
+  if (len / rate < 0.5) { afterTurn(); return; }
   const all = new Float32Array(len);
   let o = 0;
   for (const c of chunks) { all.set(c, o); o += c.length; }
   void send('', { audio: wavB64(down(all, rate, 16000), 16000) });
 }
 async function micOn(): Promise<void> {
+  if (!S.props?.modalities?.audio) { note('this model has no audio input', true); return; }
   try {
     const c = ac();
     M.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
@@ -495,7 +624,7 @@ async function micOn(): Promise<void> {
     M.proc = c.createScriptProcessor(2048, 1, 1);
     M.src.connect(M.proc);
     M.proc.connect(c.destination);
-    M.proc.onaudioprocess = e => vad(new Float32Array(e.inputBuffer.getChannelData(0)));
+    M.proc.onaudioprocess = e => onFrame(new Float32Array(e.inputBuffer.getChannelData(0)));
     S.handsfree = true;
     $('#mic').classList.add('live');
     if (!S.busy && !T.playing) afterTurn();
@@ -504,7 +633,7 @@ async function micOn(): Promise<void> {
 function micOff(): void {
   M.proc?.disconnect(); M.src?.disconnect();
   M.stream?.getTracks().forEach(t => t.stop());
-  M.proc = null; M.src = null; M.stream = null; M.rec = false; M.buf = []; M.pre = [];
+  M.proc = null; M.src = null; M.stream = null; M.buf = []; M.pre = []; vad.reset();
   S.handsfree = false;
   $('#mic').classList.remove('live');
   Orb.state.mic = 0;
@@ -599,34 +728,64 @@ inp.addEventListener('input', () => {
   typingTimer = window.setTimeout(() => { Orb.state.typing = false; }, 1500);
 });
 inp.addEventListener('input', () => { inp.style.height = 'auto'; inp.style.height = `${Math.min(120, inp.scrollHeight)}px`; });
-$('#cog').onclick = () => $('#opts').classList.toggle('show');
+const opts = $('#opts');
+$('#cog').onclick = () => opts.classList.toggle('show');
+$('#optsclose').onclick = () => opts.classList.remove('show');
+document.addEventListener('keydown', e => { if (e.key === 'Escape') opts.classList.remove('show'); });
+document.addEventListener('pointerdown', e => {
+  if (opts.classList.contains('show') && !opts.contains(e.target as Node) && !(e.target as Element).closest('#cog')) opts.classList.remove('show');
+});
 
 function bindText(id: string, key: 'sys' | 'voice'): void {
   const el = $<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(id);
   el.value = S.set[key];
   el.onchange = () => { S.set[key] = el.value; store.set('ora.set', S.set); };
 }
-function bindNum(id: string, key: 'temp' | 'maxtok' | 'pagepx'): void {
+function bindNum(id: string, key: 'temp' | 'maxtok' | 'pagepx' | 'pause'): void {
   const el = $<HTMLInputElement>(id);
+  const out = document.getElementById(`${id.slice(1)}-v`);
+  const show = (): void => { if (out) out.textContent = key === 'pause' ? `${(Number(el.value) / 1000).toFixed(1)} s` : Number(el.value).toFixed(1); };
   el.value = String(S.set[key]);
-  el.onchange = () => { S.set[key] = Number(el.value); store.set('ora.set', S.set); };
+  show();
+  el.oninput = show;
+  el.onchange = () => {
+    const n = Number(el.value);
+    const lo = el.min === '' ? -Infinity : Number(el.min), hi = el.max === '' ? Infinity : Number(el.max);
+    S.set[key] = Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : S.set[key];
+    el.value = String(S.set[key]);
+    if (key === 'pause') vad.silenceMs = S.set.pause;
+    store.set('ora.set', S.set);
+  };
 }
 bindText('#sys', 'sys');
 bindText('#voice', 'voice');
 bindNum('#temp', 'temp');
 bindNum('#maxtok', 'maxtok');
 bindNum('#pagepx', 'pagepx');
+bindNum('#pause', 'pause');
 
 for (const c of document.querySelectorAll<HTMLButtonElement>('#cards button')) {
   c.onclick = () => { inp.value = c.dataset.prompt ?? ''; inp.focus(); inp.dispatchEvent(new Event('input')); };
 }
+// Phones get a drawer and a metrics sheet that start closed; wide landscape screens keep the floating panel.
+const desk = matchMedia('(min-width: 768px) and (min-aspect-ratio: 1/1)');
 const left = $('#left');
-left.classList.toggle('collapsed', store.get('ora.collapsed', false));
-$('#collapse').onclick = () => { left.classList.add('collapsed'); store.set('ora.collapsed', true); };
-$('#reopen').onclick = () => { left.classList.remove('collapsed'); store.set('ora.collapsed', false); };
+const setPanel = (hidden: boolean): void => { left.classList.toggle('collapsed', hidden); if (desk.matches) store.set('ora.collapsed', hidden); };
+left.classList.toggle('collapsed', desk.matches ? store.get('ora.collapsed', false) : true);
+$('#collapse').onclick = () => setPanel(true);
+$('#reopen').onclick = () => setPanel(false);
+$('#scrim').onclick = () => setPanel(true);
+const closeDrawer = (): void => { if (!desk.matches) left.classList.add('collapsed'); };
+$('#newchat').addEventListener('click', closeDrawer);
+$('#chatlist').addEventListener('click', e => { if ((e.target as Element).closest('.chatrow') && !(e.target as Element).closest('button')) closeDrawer(); });
 const metrics = $('#metrics');
 metrics.classList.toggle('min', store.get('ora.metricsMin', false));
-$('#mtoggle').onclick = () => { metrics.classList.toggle('min'); store.set('ora.metricsMin', metrics.classList.contains('min')); };
+$('#mshow').onclick = () => document.body.classList.toggle('metrics-open');
+$('#mtoggle').onclick = () => {
+  if (!desk.matches) { document.body.classList.remove('metrics-open'); return; }
+  metrics.classList.toggle('min');
+  store.set('ora.metricsMin', metrics.classList.contains('min'));
+};
 const speak = $<HTMLInputElement>('#speak');
 speak.checked = S.set.speak;
 speak.onchange = () => { S.set.speak = speak.checked; store.set('ora.set', S.set); if (!S.set.speak) ttsStop(); };
@@ -634,12 +793,13 @@ $('#newchat').onclick = () => { void newChat(); };
 $('#clear').onclick = () => { void newChat(); };
 
 /* ---------- boot ---------- */
+requestAnimationFrame(() => requestAnimationFrame(() => document.body.classList.remove('no-anim')));
 hooks.renderLog = renderLog;
 hooks.showCtx = showCtx;
 hooks.note = note;
 hooks.statusline = statusline;
 hooks.stopSpeech = ttsStop;
-hooks.abortChat = () => { S.abort?.abort(); };
+hooks.abortChat = async () => { S.abort?.abort(); ttsStop(); await inflight; };
 
 showCtx();
 void Orb.ready.then(n => setM('gfx', n));

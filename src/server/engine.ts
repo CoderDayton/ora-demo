@@ -136,7 +136,7 @@ export class Engine {
       const t = setTimeout(() => process.kill(pid, 'SIGKILL'), 6000);
       child.once('exit', () => { clearTimeout(t); resolve(); });
       this.state = 'stopping';
-      process.kill(pid, 'SIGTERM');
+      try { process.kill(pid, 'SIGTERM'); } catch { /* already exited; the exit event resolves */ }
     });
   }
 

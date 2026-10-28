@@ -53,5 +53,6 @@ it uses a temp file that is deleted right after loading. Windows cannot delete a
 ## npm dependencies that ship in the product
 
 Only the web bundle's dependencies end up inside `bin/ora`: `vgpu` and `@vgpu/wgsl` (MIT) for the orb's WebGPU
-rendering. Build and dev tools (`vite` MIT, `scriptc` Apache-2.0, `typescript` Apache-2.0, `lefthook` MIT) are
+rendering, and the Inter variable font (`@fontsource-variable/inter`, SIL Open Font License 1.1, Latin subset,
+about 48 KB, inlined into the stylesheet). The font licence is kept in `third_party/Inter-OFL.txt`. Build and dev tools (`vite` MIT, `scriptc` Apache-2.0, `typescript` Apache-2.0, `lefthook` MIT) are
 not shipped.
