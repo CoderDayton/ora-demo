@@ -19,6 +19,7 @@ type, or a port outside range) falls back to the default.
 | `dataDir` | `ORA_DATA` | `~/.local/share/ora` |
 | `distDir` | `ORA_DIST` | unset: serve the embedded web app; set: serve the web files from this folder |
 | `tools` | `ORA_TOOLS` | `["docs", "utility"]`: tool groups the page may switch on (`docs`, `utility`, `web`, `system`). Env is comma-separated; `none` allows no group. |
+| `modelFilter` | `ORA_MODEL_FILTER` | unset: the picker lists every model found. Set (e.g. `lfm3`): only models whose path contains it, ignoring case |
 | `workDir` | `ORA_WORKDIR` | `<dataDir>/work`: the only folder the `system` tools can read, write or run commands in |
 | `searchUrl` | `ORA_SEARCH_URL` | unset: `web_search` is unavailable. A URL with `{q}`, e.g. a local SearXNG `http://127.0.0.1:8080/search?format=json&q={q}` |
 

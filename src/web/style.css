@@ -1094,6 +1094,123 @@ body.chatting #hero {
   font-variant-numeric: tabular-nums;
 }
 
+/* form controls: toggle switches, slim sliders, selects with their own arrow */
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  position: relative;
+  width: 40px;
+  height: 24px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--line-2);
+  cursor: pointer;
+  transition:
+    background 0.18s,
+    border-color 0.18s;
+}
+input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--fg);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  transition: transform 0.18s;
+}
+input[type="checkbox"]:checked {
+  background: var(--grad);
+  border-color: transparent;
+}
+input[type="checkbox"]:checked::after {
+  transform: translateX(16px);
+}
+input[type="checkbox"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+input[type="range"] {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 24px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.16);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--fg);
+  border: none;
+  box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.4);
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.16);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 50%;
+  background: var(--fg);
+  box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.4);
+}
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 30px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a6aac0' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 16px;
+}
+select option {
+  background: #1b1c23;
+  color: var(--fg);
+}
+input[type="number"] {
+  text-align: right;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+#opts textarea {
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+#opts label {
+  color: var(--fg);
+  line-height: 1.35;
+}
+#opts label select,
+#opts label .range,
+#opts label input {
+  flex: none;
+}
+#composer:focus-within {
+  box-shadow:
+    0 0 50px rgba(139, 92, 246, 0.34),
+    0 14px 40px rgba(0, 0, 0, 0.45);
+}
+
 /* tablets in portrait keep the phone layout; very short windows get a smaller hero */
 @media (max-height: 640px) {
   #hero h1 {

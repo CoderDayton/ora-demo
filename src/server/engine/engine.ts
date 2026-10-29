@@ -75,6 +75,12 @@ export function prepareModelsDir(dir: string): void {
   if (!existsSync(readme)) writeFileSync(readme, MODELS_README);
 }
 
+// The picker shows only the models whose path contains `filter`, ignoring case; an empty filter shows all.
+export function filterModels(models: ModelInfo[], filter: string): ModelInfo[] {
+  const f = filter.toLowerCase();
+  return f ? models.filter(m => m.path.toLowerCase().includes(f)) : models;
+}
+
 export function scanModels(root: string): ModelInfo[] {
   const out: ModelInfo[] = [];
   const walk = (dir: string, depth: number): void => {

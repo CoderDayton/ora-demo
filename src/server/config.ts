@@ -13,6 +13,7 @@ export interface Config {
   tools: string[];
   workDir: string;
   searchUrl: string;
+  modelFilter: string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -78,5 +79,6 @@ export function loadConfig(env: Env, fileText: string | null): Config {
     tools: toolGroups(env.ORA_TOOLS, file.tools),
     workDir: text(env.ORA_WORKDIR) ?? text(file.workDir) ?? join(text(env.ORA_DATA) ?? text(file.dataDir) ?? join(dataHome, 'ora'), 'work'),
     searchUrl: text(env.ORA_SEARCH_URL) ?? text(file.searchUrl) ?? '',
+    modelFilter: text(env.ORA_MODEL_FILTER) ?? text(file.modelFilter) ?? '',
   };
 }

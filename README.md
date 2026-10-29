@@ -9,8 +9,8 @@ A local voice, image and document chat app for GGUF models, with an orb that rea
 
 </div>
 
-**Ora is a demo, not a product.** It shows what the model behind Lune Voice can do: voice, images and documents in
-one chat. It has no release process, support or compatibility promises, and you build it yourself.
+**Ora is a demo, not a product.** It shows what the LFM3-Omni-2B model can do: voice, images and documents in
+one chat, with tool calls. It has no release process, support or compatibility promises, and you build it yourself.
 
 Ora is one native program that serves a web UI on localhost, keeps chats and documents in SQLite, starts and
 stops [`llama-server`](https://github.com/ggml-org/llama.cpp) for you, and renders PDFs to page images for vision

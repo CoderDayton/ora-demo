@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { prepareModelsDir, scanModels } from '../../src/server/engine/engine.ts';
+import { filterModels, prepareModelsDir, scanModels } from '../../src/server/engine/engine.ts';
 
 function same(actual: unknown, expected: unknown): void {
   assert.strictEqual(JSON.stringify(actual), JSON.stringify(expected));
@@ -12,6 +12,17 @@ function same(actual: unknown, expected: unknown): void {
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), 'ora-models-'));
 }
+
+test('a model filter keeps the models whose path contains it, ignoring case; empty keeps all', () => {
+  const m = (path: string) => ({ path, name: path, sizeMB: 1, mmproj: [] });
+  const all = [m('/m/lfm3-omni/LFM3-Omni-2B-Q8_0.gguf'), m('/m/Qwen3.5-2B/q.gguf'), m('/m/lfm3-audio/a.gguf')];
+  same(
+    filterModels(all, 'lfm3').map(x => x.path),
+    ['/m/lfm3-omni/LFM3-Omni-2B-Q8_0.gguf', '/m/lfm3-audio/a.gguf'],
+  );
+  same(filterModels(all, '').length, 3);
+  same(filterModels(all, 'nothing'), []);
+});
 
 test('prepareModelsDir creates a missing folder, parents included, with a README', () => {
   const dir = join(tmp(), 'a', 'b', 'models');

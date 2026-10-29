@@ -20,6 +20,7 @@ test('defaults hard-code nothing personal', () => {
     tools: ['docs', 'utility'],
     workDir: '/h/.local/share/ora/work',
     searchUrl: '',
+    modelFilter: '',
   });
 });
 
@@ -28,6 +29,11 @@ test('tools: the file and ORA_TOOLS choose the groups the page may switch on; un
   same(loadConfig({ HOME: '/h', ORA_TOOLS: 'utility, web' }, JSON.stringify({ tools: ['docs'] })).tools, ['utility', 'web']);
   same(loadConfig(HOME, JSON.stringify({ tools: ['docs', 'root', 5] })).tools, ['docs']);
   same(loadConfig({ HOME: '/h', ORA_TOOLS: 'none' }, null).tools, []);
+});
+
+test('modelFilter limits the model picker: file, then ORA_MODEL_FILTER', () => {
+  same(loadConfig(HOME, JSON.stringify({ modelFilter: 'lfm3' })).modelFilter, 'lfm3');
+  same(loadConfig({ HOME: '/h', ORA_MODEL_FILTER: 'omni' }, JSON.stringify({ modelFilter: 'lfm3' })).modelFilter, 'omni');
 });
 
 test('workDir follows dataDir; workDir and searchUrl can be set', () => {

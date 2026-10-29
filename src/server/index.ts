@@ -11,7 +11,7 @@ import { configPath, loadConfig } from './config.ts';
 import { chunkText, extractDoc, isPdf } from './docs/docs.ts';
 import { ingestPdf, PageRenderer } from './docs/pages.ts';
 import { renderWorker } from './docs/pdfium.ts';
-import { Engine, prepareModelsDir, scanModels } from './engine/engine.ts';
+import { Engine, filterModels, prepareModelsDir, scanModels } from './engine/engine.ts';
 import { proxy } from './llm/proxy.ts';
 import { openStore } from './store/store.ts';
 import { GROUPS, TOOLS } from './tools/catalog.ts';
@@ -255,7 +255,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     return serveStatic(p, res);
   }
 
-  if (p === '/api/models' && method === 'GET') return send(res, 200, scanModels(MODELS_DIR));
+  if (p === '/api/models' && method === 'GET') return send(res, 200, filterModels(scanModels(MODELS_DIR), config.modelFilter));
   if (p === '/api/status' && method === 'GET') return send(res, 200, engine.status());
   if (p === '/api/start' && method === 'POST') {
     const b = await readJson(req, 65536);
