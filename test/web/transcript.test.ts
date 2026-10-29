@@ -15,6 +15,14 @@ test('with English expected, a transcript in another language is noise', () => {
   assert.equal(isNoise('What is the price of the café?', 'English'), false);
 });
 
+test('English loanwords with accents do not make an English sentence look foreign', () => {
+  for (const s of ['Is it café', 'Update my résumé', 'That is a naïve cliché', 'Order a jalapeño crème brûlée']) {
+    assert.equal(isNoise(s, 'English'), false, s);
+  }
+  assert.equal(isNoise('provò a escele.', 'English'), true);
+  assert.equal(isNoise('café provò', 'English'), true);
+});
+
 test('real sentences and short commands are kept', () => {
   for (const s of [
     'Okay, good. So.',

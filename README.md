@@ -7,6 +7,8 @@ A local voice, image and document chat app for GGUF models, with an orb that rea
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 ![Node >= 24](https://img.shields.io/badge/node-%3E%3D24-339933)
 
+<img src="assets/ora.png" alt="Ora with LFM3-Omni-2B loaded: the orb, the chat box and the metrics panel" width="640">
+
 </div>
 
 **Ora is a demo, not a product.** It shows what the LFM3-Omni-2B model can do: voice, images and documents in

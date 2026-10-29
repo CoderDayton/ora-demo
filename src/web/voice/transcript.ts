@@ -55,13 +55,39 @@ const FOREIGN = new Set([
   'ist',
 ]);
 
+// Accented words that are ordinary English, so they do not count as another language.
+const LOANWORDS = new Set([
+  'café',
+  'cafés',
+  'résumé',
+  'résumés',
+  'naïve',
+  'cliché',
+  'clichés',
+  'fiancé',
+  'fiancée',
+  'jalapeño',
+  'piñata',
+  'crème',
+  'brûlée',
+  'soufflé',
+  'sauté',
+  'entrée',
+  'touché',
+  'protégé',
+  'façade',
+  'señor',
+  'déjà',
+  'pokémon',
+]);
+
 // `language` is the one the recognizer was asked for; with English, a transcript that reads as another language is noise.
 export function isNoise(text: string, language = ''): boolean {
   const clean = text.replace(/\[[^\]]*\]|\([^)]*\)/g, ' ').toLowerCase();
   const words = clean.match(/[a-z0-9'-]*[a-z0-9]+/g);
   if (!words) return true;
   if (language === 'English') {
-    const all = clean.match(/[\p{L}\p{N}'-]+/gu) ?? [];
+    const all = (clean.match(/[\p{L}\p{N}'-]+/gu) ?? []).filter(w => !LOANWORDS.has(w));
     const accented = all.filter(w => /[^\p{ASCII}]/u.test(w)).length;
     if (accented * 3 >= all.length || words.filter(w => FOREIGN.has(w)).length >= 2) return true;
   }
