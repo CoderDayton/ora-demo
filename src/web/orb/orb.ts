@@ -77,6 +77,9 @@ const wide = matchMedia('(min-width: 768px) and (min-aspect-ratio: 1/1)');
 let dock = 0;
 // Orb centre as a fraction of the height and radius as a fraction of the short side. Once a conversation starts the
 // orb shrinks toward the top edge, which leaves the screen to the messages.
+// Horizontal centre as a fraction of the width: the middle of the stage, which sits beside the side panels.
+export const view = { x: 0.5 };
+
 function place(w: number, h: number): { y: number; r: number } {
   if (wide.matches) return { y: 0.33 - 0.12 * dock, r: 0.13 - 0.035 * dock };
   const r0 = Math.min(0.2, (0.11 * h) / Math.min(w, h));
@@ -95,7 +98,7 @@ resize();
 // Pointer relative to the orb centre, normalised so the screen edge is about 1.
 addEventListener('pointermove', ev => {
   O.pointer = {
-    x: (ev.clientX - innerWidth / 2) / (innerWidth / 2),
+    x: (ev.clientX - innerWidth * view.x) / (innerWidth / 2),
     y: -(ev.clientY - innerHeight * place(innerWidth, innerHeight).y) / (innerHeight / 2),
   };
 });
@@ -179,7 +182,7 @@ function frame(now: number): void {
     });
     gpu.draw({
       res: [gw, gh],
-      center: [gw / 2, gh * place(gw, gh).y],
+      center: [gw * view.x, gh * place(gw, gh).y],
       time: t,
       radius: Math.min(gw, gh) * place(gw, gh).r * (1 + 0.04 * Math.sin(t * 1.3) + O.energy * 0.12 + O.pulse * 0.1),
       energy: O.energy,
@@ -209,7 +212,7 @@ function frame(now: number): void {
   g.fillRect(0, 0, W, H);
 
   const pl = place(W, H);
-  const cx = W / 2,
+  const cx = W * view.x,
     cy = H * pl.y;
   const base = Math.min(W, H) * pl.r;
   const R = base * (1 + 0.04 * Math.sin(t * 1.3) + O.energy * 0.12 + O.pulse * 0.1);

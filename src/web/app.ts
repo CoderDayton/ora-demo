@@ -15,7 +15,7 @@ import {
   toolsBox,
   toolsEnded,
 } from './chat/tools.ts';
-import { Orb } from './orb/orb.ts';
+import { Orb, view } from './orb/orb.ts';
 import type { ChatInfo, Part, Props, Usage } from './state.ts';
 import { $, api, fmt, hooks, L, S, store } from './state.ts';
 import {
@@ -207,10 +207,14 @@ function applyEngine(st: EngineStatus): void {
   if (!S.busy && !S.handsfree)
     Orb.setMode(st.state === 'ready' ? 'idle' : st.state === 'starting' ? 'boot' : st.state === 'error' ? 'error' : 'off');
   if (st.state !== E.last && (st.state === 'stopped' || st.state === 'error')) $<HTMLDetailsElement>('#engine').open = true;
+  if (st.state !== 'ready' && E.last === 'ready') engineDown();
   if (st.state === 'ready' && E.last !== 'ready') void loadProps();
   if (st.state !== 'ready') {
     S.props = null;
+    S.nctx = 0;
     Orb.state.kv = 0;
+    for (const b of document.querySelectorAll<HTMLElement>('.badge')) b.classList.remove('on');
+    showCtx();
   }
   E.last = st.state;
 }
@@ -659,6 +663,17 @@ function afterTurn(): void {
   }, IDLE_MS);
 }
 speechEvents.idle = afterTurn;
+// The model went away (Stop, crash or restart): end whatever depended on it so the page shows the stopped state.
+function engineDown(): void {
+  speechStop();
+  S.abort?.abort();
+  clearTimeout(idleTimer);
+  live.rate = 0;
+  vad.silenceMs = S.set.pause;
+  if (S.handsfree) micOff();
+  statusline('');
+  Orb.setMode('off');
+}
 // Speaking while the orb is thinking or talking stops it and takes the new utterance.
 function interrupt(): void {
   S.abort?.abort();
@@ -1000,15 +1015,15 @@ void initToolSettings(toolsBox());
 bindNum('#pause', 'pause');
 bindNum('#rate', 'rate');
 
-for (const c of document.querySelectorAll<HTMLButtonElement>('#cards button')) {
-  c.onclick = () => {
-    inp.value = c.dataset.prompt ?? '';
-    inp.focus();
-    inp.dispatchEvent(new Event('input'));
-  };
-}
 // Phones get a drawer and a metrics sheet that start closed; wide landscape screens keep the floating panel.
 const desk = matchMedia('(min-width: 768px) and (min-aspect-ratio: 1/1)');
+// The orb follows the stage, which moves when the side panels open or close.
+const stageEl = $('#stage');
+new ResizeObserver(() => {
+  const r = stageEl.getBoundingClientRect();
+  if (innerWidth > 0 && r.width > 0) view.x = (r.left + r.width / 2) / innerWidth;
+}).observe(stageEl);
+
 const left = $('#left');
 const setPanel = (hidden: boolean): void => {
   left.classList.toggle('collapsed', hidden);
