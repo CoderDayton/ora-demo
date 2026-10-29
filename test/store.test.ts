@@ -1,8 +1,9 @@
 import assert from 'node:assert';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { Sql } from '../src/server/sqlite.ts';
 import { openStore } from '../src/server/store.ts';
 
 // JSON comparison keeps every operand the same static type, which scriptc's assert lowering requires.
@@ -15,7 +16,10 @@ test('chats list newest-updated first and titles rename', () => {
   const a = db.createChat('first');
   const b = db.createChat('second');
   db.addMessage(a.id, 'user', 'hi');
-  same(db.listChats().map(c => c.id), [a.id, b.id]);
+  same(
+    db.listChats().map(c => c.id),
+    [a.id, b.id],
+  );
   db.renameChat(b.id, 'renamed');
   same(db.getChat(b.id)?.title, 'renamed');
 });
@@ -23,7 +27,10 @@ test('chats list newest-updated first and titles rename', () => {
 test('messages round-trip structured content in order', () => {
   const db = openStore(':memory:');
   const c = db.createChat('');
-  const parts = [{ type: 'text', text: 'look' }, { type: 'image_url', image_url: { url: 'data:x' } }];
+  const parts = [
+    { type: 'text', text: 'look' },
+    { type: 'image_url', image_url: { url: 'data:x' } },
+  ];
   db.addMessage(c.id, 'user', parts);
   db.addMessage(c.id, 'assistant', 'a red circle');
   const ms = db.messages(c.id);
@@ -92,14 +99,17 @@ test('allText returns whole docs in order for small-document inlining', () => {
   const db = openStore(':memory:');
   const c = db.createChat('');
   db.addDoc(c.id, 'a.txt', 'text', null, ['first', 'second']);
-  same(db.allText(c.id), [{ name: 'a.txt', text: 'first\nsecond' }]);
+  same(db.allText(c.id), [{ name: 'a.txt', text: 'first\n\nsecond' }]);
 });
 
 test('head returns the leading chunks in document order', () => {
   const db = openStore(':memory:');
   const c = db.createChat('');
   db.addDoc(c.id, 'a.txt', 'text', null, ['one', 'two', 'three']);
-  same(db.head(c.id, 2).map(h => h.text), ['one', 'two']);
+  same(
+    db.head(c.id, 2).map(h => h.text),
+    ['one', 'two'],
+  );
 });
 
 test('pdf pages are stored as files, served by number, and removed with the doc and chat', () => {
@@ -133,6 +143,75 @@ test('allText skips pdf documents, which carry no text', () => {
   same(db.allText(c.id), [{ name: 'a.txt', text: 'hello' }]);
 });
 
+test('pdf page text is searchable per page, ranked, and scoped to the chat', () => {
+  const db = openStore(':memory:');
+  const c = db.createChat('');
+  const other = db.createChat('');
+  const d = db.addDoc(c.id, 'manual.pdf', 'pdf', 3, []);
+  db.addPageText(d.id, ['table of contents', 'orbital mechanics and delta-v budgets', 'appendix: delta tables']);
+  const o = db.addDoc(other.id, 'x.pdf', 'pdf', 1, []);
+  db.addPageText(o.id, ['orbital decay']);
+  const hits = db.searchPages(c.id, 'what are the orbital delta-v budgets?', 5);
+  same(hits[0], { docId: d.id, page: 2 });
+  same(hits.filter(h => h.docId !== d.id).length, 0);
+  same(db.searchPages(c.id, 'the of', 5), []);
+  db.deleteDoc(d.id);
+  same(db.searchPages(c.id, 'orbital', 5), []);
+});
+
+test('a pdf keeps its source and page size so pages can be rendered later', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ora-src-'));
+  try {
+    const db = openStore(dir);
+    const c = db.createChat('');
+    const d = db.addDoc(c.id, 'a.pdf', 'pdf', 2, []);
+    db.savePdf(d.id, new Uint8Array([37, 80, 68, 70]), 1536);
+    same(db.getDoc(d.id)?.px, 1536);
+    const src = db.pdfFile(d.id);
+    assert.ok(src !== null && existsSync(src));
+    same(db.pageFile(d.id, 2)?.endsWith('2.jpg'), true);
+    db.deleteDoc(d.id);
+    same(existsSync(src as string), false);
+    db.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an existing database from before page search is upgraded in place', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ora-mig-'));
+  try {
+    // The docs table as it was before page search and stored page sizes.
+    const s = new Sql();
+    s.open(join(dir, 'ora.db'));
+    s.exec(`create table chats(id integer primary key, title text not null, created integer not null, updated integer not null);
+      create table docs(id integer primary key, chat_id integer not null references chats(id) on delete cascade,
+        name text not null, kind text not null, pages integer, chars integer not null, chunks integer not null, created integer not null);`);
+    s.run('insert into chats(title, created, updated) values (?, ?, ?)', ['old', 1, 1]);
+    s.run('insert into docs(chat_id, name, kind, pages, chars, chunks, created) values (?, ?, ?, ?, ?, ?, ?)', [
+      1,
+      'a.pdf',
+      'pdf',
+      2,
+      0,
+      0,
+      1,
+    ]);
+    s.close();
+    const b = openStore(dir);
+    same(b.getChat(1)?.title, 'old');
+    same(b.getDoc(1)?.px, null);
+    b.addPageText(1, ['first page', 'hello there']);
+    same(b.searchPages(1, 'hello', 1), [{ docId: 1, page: 2 }]);
+    b.close();
+    const again = openStore(dir);
+    same(again.searchPages(1, 'hello', 1).length, 1);
+    again.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('data survives reopening the same directory', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ora-store-'));
   try {
@@ -144,7 +223,10 @@ test('data survives reopening the same directory', () => {
     a.close();
     const b = openStore(dir);
     same(b.getChat(c.id)?.title, 'keep me');
-    same(b.messages(c.id).map(m => m.content), ['hello', 'hi there']);
+    same(
+      b.messages(c.id).map(m => m.content),
+      ['hello', 'hi there'],
+    );
     same(b.search(c.id, 'searchable', 3)[0]?.docId, d.id);
     b.deleteChat(c.id);
     same(b.getChat(c.id), null);

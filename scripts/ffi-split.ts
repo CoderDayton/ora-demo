@@ -4,7 +4,10 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-interface Manifest { functions: { symbol: string }[]; [k: string]: unknown }
+interface Manifest {
+  functions: { symbol: string }[];
+  [k: string]: unknown;
+}
 
 const dir = fileURLToPath(new URL('../ffi/', import.meta.url));
 const all = JSON.parse(readFileSync(`${dir}ffi.json`, 'utf8')) as Manifest;

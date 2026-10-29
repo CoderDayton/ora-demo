@@ -1,8 +1,17 @@
 // Persona: the orb's mood, expression and persistent memory. Pure logic, no DOM.
 
 export type Expression =
-  | 'off' | 'idle' | 'listening' | 'thinking' | 'tool' | 'talking'
-  | 'strained' | 'happy' | 'surprised' | 'sleepy' | 'error';
+  | 'off'
+  | 'idle'
+  | 'listening'
+  | 'thinking'
+  | 'tool'
+  | 'talking'
+  | 'strained'
+  | 'happy'
+  | 'surprised'
+  | 'sleepy'
+  | 'error';
 
 export interface Senses {
   mode: string;
@@ -30,7 +39,12 @@ export interface Look {
   strain: number;
 }
 
-export interface Mood { valence: number; arousal: number; curiosity: number; strain: number }
+export interface Mood {
+  valence: number;
+  arousal: number;
+  curiosity: number;
+  strain: number;
+}
 
 export interface Memory {
   turns: number;
@@ -54,8 +68,7 @@ export type PersonaEvent =
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 const num = (v: unknown, def: number, lo: number, hi: number): number =>
   typeof v === 'number' && Number.isFinite(v) ? clamp(v, lo, hi) : def;
-const approach = (cur: number, target: number, rate: number, dt: number): number =>
-  cur + (target - cur) * (1 - Math.exp(-rate * dt));
+const approach = (cur: number, target: number, rate: number, dt: number): number => cur + (target - cur) * (1 - Math.exp(-rate * dt));
 const wrap = (h: number): number => ((h % 360) + 360) % 360;
 const hueDelta = (from: number, to: number): number => ((to - from + 540) % 360) - 180;
 const familiarity = (turns: number): number => 0.5 + 0.25 * (1 - Math.exp(-turns / 150));
@@ -63,7 +76,11 @@ const familiarity = (turns: number): number => 0.5 + 0.25 * (1 - Math.exp(-turns
 const SLEEP_AFTER = 120;
 const BLINK_LEN = 0.16;
 
-interface Pose { open: number; scale: number; smile: number }
+interface Pose {
+  open: number;
+  scale: number;
+  smile: number;
+}
 
 export class Persona {
   memory: Memory;
@@ -190,7 +207,9 @@ export class Persona {
     const glow = expr === 'off' ? 0.1 : expr === 'sleepy' ? 0.35 : clamp(0.45 + m.arousal * 0.4 + s.out * 0.3, 0, 1);
 
     return {
-      hue, sat, glow,
+      hue,
+      sat,
+      glow,
       eyeOpen: this.pose.open * (expr === 'off' ? 1 : 1 - this.blink(t)),
       eyeScale: this.pose.scale,
       eyeSmile: this.pose.smile,
@@ -222,27 +241,43 @@ export class Persona {
 
   private poseFor(expr: Expression, s: Senses): Pose {
     switch (expr) {
-      case 'off': return { open: 0.04, scale: 1, smile: 0 };
-      case 'sleepy': return { open: 0.4, scale: 1, smile: 0.05 };
-      case 'thinking': return { open: 0.6, scale: 0.95, smile: 0 };
-      case 'tool': return { open: 0.85, scale: 1.05, smile: 0 };
-      case 'strained': return { open: 0.55, scale: 1, smile: 0 };
-      case 'happy': return { open: 0.55, scale: 1, smile: 1 };
-      case 'surprised': return { open: 1, scale: 1.4, smile: 0 };
-      case 'error': return { open: 0.9, scale: 1.1, smile: 0 };
-      case 'listening': return { open: 1, scale: 1.1 + clamp(s.mic, 0, 1) * 0.6, smile: 0.1 };
-      case 'talking': return { open: 0.95, scale: 1 + clamp(s.out, 0, 1) * 0.1, smile: 0.3 };
-      default: return { open: 1, scale: 1, smile: clamp(0.12 + (this.mood.valence - 0.5) * 0.5, 0, 1) };
+      case 'off':
+        return { open: 0.04, scale: 1, smile: 0 };
+      case 'sleepy':
+        return { open: 0.4, scale: 1, smile: 0.05 };
+      case 'thinking':
+        return { open: 0.6, scale: 0.95, smile: 0 };
+      case 'tool':
+        return { open: 0.85, scale: 1.05, smile: 0 };
+      case 'strained':
+        return { open: 0.55, scale: 1, smile: 0 };
+      case 'happy':
+        return { open: 0.55, scale: 1, smile: 1 };
+      case 'surprised':
+        return { open: 1, scale: 1.4, smile: 0 };
+      case 'error':
+        return { open: 0.9, scale: 1.1, smile: 0 };
+      case 'listening':
+        return { open: 1, scale: 1.1 + clamp(s.mic, 0, 1) * 0.6, smile: 0.1 };
+      case 'talking':
+        return { open: 0.95, scale: 1 + clamp(s.out, 0, 1) * 0.1, smile: 0.3 };
+      default:
+        return { open: 1, scale: 1, smile: clamp(0.12 + (this.mood.valence - 0.5) * 0.5, 0, 1) };
     }
   }
 
   private gazeFor(expr: Expression, s: Senses, t: number): [number, number] {
     switch (expr) {
-      case 'thinking': return [-0.45, 0.55];
-      case 'tool': return [Math.sin(t * 3.2) * 0.9 * this.scan, 0.05];
-      case 'strained': return [Math.sin(t * 23) * 0.05, 0];
-      case 'sleepy': return [0, -0.3];
-      case 'off': return [0, -0.2];
+      case 'thinking':
+        return [-0.45, 0.55];
+      case 'tool':
+        return [Math.sin(t * 3.2) * 0.9 * this.scan, 0.05];
+      case 'strained':
+        return [Math.sin(t * 23) * 0.05, 0];
+      case 'sleepy':
+        return [0, -0.3];
+      case 'off':
+        return [0, -0.2];
       case 'idle':
         if (s.typing) return [0, -0.6];
         if (s.pointer) return [clamp(s.pointer.x * 0.8, -0.8, 0.8), clamp(s.pointer.y * 0.6, -0.6, 0.6)];
@@ -252,7 +287,8 @@ export class Persona {
           this.wanderAt = t + 1.5 + this.rand() * 2.5;
         }
         return [this.wanderX, this.wanderY];
-      default: return [0, 0.05];
+      default:
+        return [0, 0.05];
     }
   }
 

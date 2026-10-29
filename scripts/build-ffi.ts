@@ -20,9 +20,7 @@ function archiver(): string {
     try {
       execFileSync(name, ['--version'], { stdio: 'ignore' });
       return name;
-    } catch {
-      continue;
-    }
+    } catch {}
   }
   throw new Error('neither ar nor llvm-ar found on PATH (set AR)');
 }
@@ -30,7 +28,14 @@ function archiver(): string {
 mkdirSync(build, { recursive: true });
 // Forward slashes: the path is spliced into a C string for .incbin, where backslashes would be escapes.
 const pdfium = (await ensurePdfium()).replaceAll('\\', '/');
-const sqlite = ['-O2', '-DSQLITE_THREADSAFE=0', '-DSQLITE_ENABLE_FTS5', '-DSQLITE_OMIT_LOAD_EXTENSION', '-DSQLITE_DQS=0', '-DSQLITE_DEFAULT_MEMSTATUS=0'];
+const sqlite = [
+  '-O2',
+  '-DSQLITE_THREADSAFE=0',
+  '-DSQLITE_ENABLE_FTS5',
+  '-DSQLITE_OMIT_LOAD_EXTENSION',
+  '-DSQLITE_DQS=0',
+  '-DSQLITE_DEFAULT_MEMSTATUS=0',
+];
 
 run(cc, [...sqlite, '-c', `${ffi}vendor/sqlite3.c`, '-o', `${build}sqlite3.o`]);
 run(cc, ['-O2', '-c', `${ffi}orasql.c`, '-o', `${build}orasql.o`]);

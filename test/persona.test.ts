@@ -1,24 +1,34 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Persona } from '../src/web/persona.ts';
 import type { Look, Senses } from '../src/web/persona.ts';
+import { Persona } from '../src/web/persona.ts';
 
 const calm: Senses = { mode: 'idle', mic: 0, out: 0, rate: 0, ctx: 0, kv: 0, thinking: false, tool: false, typing: false, pointer: null };
 
 // Deterministic randomness: a small LCG.
 function lcg(seed: number): () => number {
   let s = seed;
-  return () => { s = (s * 1664525 + 1013904223) % 4294967296; return s / 4294967296; };
+  return () => {
+    s = (s * 1664525 + 1013904223) % 4294967296;
+    return s / 4294967296;
+  };
 }
 
-interface Run { p: Persona; t: number; look: Look }
+interface Run {
+  p: Persona;
+  t: number;
+  look: Look;
+}
 function start(rand = lcg(7)): Run {
   const p = new Persona(undefined, rand);
   return { p, t: 0, look: p.update(1 / 60, calm, 0) };
 }
 function settle(r: Run, s: Senses, seconds: number): Look {
   const steps = Math.round(seconds * 60);
-  for (let i = 0; i < steps; i++) { r.t += 1 / 60; r.look = r.p.update(1 / 60, s, r.t); }
+  for (let i = 0; i < steps; i++) {
+    r.t += 1 / 60;
+    r.look = r.p.update(1 / 60, s, r.t);
+  }
   return r.look;
 }
 
@@ -155,7 +165,10 @@ test('memory survives a snapshot round trip and bad values fall back to defaults
   const copy = new Persona(JSON.parse(JSON.stringify(r.p.snapshot())) as never, lcg(1));
   assert.equal(copy.memory.turns, 1);
   assert.equal(copy.memory.avgTps, r.p.memory.avgTps);
-  const bad = new Persona({ turns: Number.NaN, avgTps: -5, baseline: { valence: 99, arousal: -3, curiosity: 0.5, strain: 0 } } as never, lcg(1));
+  const bad = new Persona(
+    { turns: Number.NaN, avgTps: -5, baseline: { valence: 99, arousal: -3, curiosity: 0.5, strain: 0 } } as never,
+    lcg(1),
+  );
   assert.equal(bad.memory.turns, 0);
   assert.ok(bad.memory.avgTps >= 0);
   assert.ok(bad.memory.baseline.valence <= 1 && bad.memory.baseline.arousal >= 0);

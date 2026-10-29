@@ -10,8 +10,13 @@ const HOME = { HOME: '/h' };
 
 test('defaults hard-code nothing personal', () => {
   same(loadConfig(HOME, null), {
-    port: 8800, llamaPort: 8099, llamaServer: 'llama-server', llamaArgs: [], modelsDir: '/h/.config/ora/models',
-    dataDir: '/h/.local/share/ora', distDir: null,
+    port: 8800,
+    llamaPort: 8099,
+    llamaServer: 'llama-server',
+    llamaArgs: [],
+    modelsDir: '/h/.config/ora/models',
+    dataDir: '/h/.local/share/ora',
+    distDir: null,
   });
 });
 
@@ -33,7 +38,12 @@ test('bad values in the file fall back to the default', () => {
 test('llamaArgs: none by default, a list from the file, a space-separated string from the env', () => {
   same(loadConfig(HOME, null).llamaArgs, []);
   same(loadConfig(HOME, JSON.stringify({ llamaArgs: ['-ngl', '0', '--flash-attn'] })).llamaArgs, ['-ngl', '0', '--flash-attn']);
-  same(loadConfig({ HOME: '/h', ORA_LLAMA_ARGS: '-ngl  20 -t 8' }, JSON.stringify({ llamaArgs: ['x'] })).llamaArgs, ['-ngl', '20', '-t', '8']);
+  same(loadConfig({ HOME: '/h', ORA_LLAMA_ARGS: '-ngl  20 -t 8' }, JSON.stringify({ llamaArgs: ['x'] })).llamaArgs, [
+    '-ngl',
+    '20',
+    '-t',
+    '8',
+  ]);
   same(loadConfig(HOME, JSON.stringify({ llamaArgs: ['ok', 5] })).llamaArgs, []);
 });
 

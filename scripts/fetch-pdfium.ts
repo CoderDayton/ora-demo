@@ -8,8 +8,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export interface Asset { asset: string; sha256: string; lib: string; member: string }
-export interface Lock { release: string; baseUrl: string; assets: Record<string, Asset> }
+export interface Asset {
+  asset: string;
+  sha256: string;
+  lib: string;
+  member: string;
+}
+export interface Lock {
+  release: string;
+  baseUrl: string;
+  assets: Record<string, Asset>;
+}
 
 const SUPPORTED = ['linux-x64', 'linux-arm64', 'darwin-arm64', 'win32-x64'];
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -66,8 +75,11 @@ export async function ensurePdfium(): Promise<string> {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  ensurePdfium().then(p => process.stdout.write(`${p}\n`), (e: unknown) => {
-    console.error(e instanceof Error ? e.message : String(e));
-    process.exit(1);
-  });
+  ensurePdfium().then(
+    p => process.stdout.write(`${p}\n`),
+    (e: unknown) => {
+      console.error(e instanceof Error ? e.message : String(e));
+      process.exit(1);
+    },
+  );
 }

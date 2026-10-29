@@ -15,7 +15,10 @@ test('blank lines separate paragraphs', () => {
 
 test('bold, italic and inline code', () => {
   const [b] = parseMarkdown('a **bold** and *soft* and `x = 1` end');
-  assert.deepStrictEqual(b, { t: 'p', c: [t('a '), { t: 'strong', v: 'bold' }, t(' and '), { t: 'em', v: 'soft' }, t(' and '), { t: 'code', v: 'x = 1' }, t(' end')] });
+  assert.deepStrictEqual(b, {
+    t: 'p',
+    c: [t('a '), { t: 'strong', v: 'bold' }, t(' and '), { t: 'em', v: 'soft' }, t(' and '), { t: 'code', v: 'x = 1' }, t(' end')],
+  });
 });
 
 test('markers inside code are not formatting', () => {
@@ -60,7 +63,10 @@ test('blank lines between list items do not split the list, and numbering keeps 
 });
 
 test('a paragraph after a list is not swallowed by it', () => {
-  assert.deepStrictEqual(parseMarkdown('- a\n\nafter').map(b => b.t), ['ul', 'p']);
+  assert.deepStrictEqual(
+    parseMarkdown('- a\n\nafter').map(b => b.t),
+    ['ul', 'p'],
+  );
 });
 
 test('fences accept info strings and longer fences', () => {
@@ -78,12 +84,16 @@ test('italic text may contain bold', () => {
 });
 
 test('indented items nest under the item above them', () => {
-  assert.deepStrictEqual(parseMarkdown('- a\n  - a1\n  - a2\n- b'), [{
-    t: 'ul',
-    items: [{ c: [t('a')], sub: [{ t: 'ul', items: [li('a1'), li('a2')] }] }, li('b')],
-  }]);
+  assert.deepStrictEqual(parseMarkdown('- a\n  - a1\n  - a2\n- b'), [
+    {
+      t: 'ul',
+      items: [{ c: [t('a')], sub: [{ t: 'ul', items: [li('a1'), li('a2')] }] }, li('b')],
+    },
+  ]);
   assert.deepStrictEqual(parseMarkdown('1. step\n   - detail\n2. next')[0], {
-    t: 'ol', start: 1, items: [{ c: [t('step')], sub: [{ t: 'ul', items: [li('detail')] }] }, li('next')],
+    t: 'ol',
+    start: 1,
+    items: [{ c: [t('step')], sub: [{ t: 'ul', items: [li('detail')] }] }, li('next')],
   });
 });
 
@@ -93,8 +103,30 @@ test('a code block indented under an item belongs to that item', () => {
 });
 
 const SAMPLE = [
-  '# Plan', '', 'Some **bold** text and `code`.', 'Second line.', '', '- one', '- two', '  - nested', '', '- three', '',
-  '1. first', '', '2. second', '', '```ts', 'const a = 1;', '', 'const b = 2;', '```', '', '> quote', 'after quote', '',
+  '# Plan',
+  '',
+  'Some **bold** text and `code`.',
+  'Second line.',
+  '',
+  '- one',
+  '- two',
+  '  - nested',
+  '',
+  '- three',
+  '',
+  '1. first',
+  '',
+  '2. second',
+  '',
+  '```ts',
+  'const a = 1;',
+  '',
+  'const b = 2;',
+  '```',
+  '',
+  '> quote',
+  'after quote',
+  '',
   'Final *words* here.',
 ].join('\n');
 

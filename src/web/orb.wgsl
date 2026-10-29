@@ -97,7 +97,7 @@ fn shellDots(ro: vec3f, rd: vec3f, rot: mat3x3f, radius: f32, t: f32, amp: f32, 
   let lat = asin(clamp(l.y, -1.0, 1.0));
   let lon = atan2(l.z, l.x);
   let act = clamp((amp - 0.03) / 0.12, 0.0, 1.0);
-  let bands = 112.0;
+  let bands = 200.0;
   let bi = floor((lat / PI + 0.5) * bands);
   let bl = ((bi + 0.5) / bands - 0.5) * PI;
   let cnt = max(1.0, floor(2.0 * bands * cos(bl)));
@@ -109,7 +109,7 @@ fn shellDots(ro: vec3f, rd: vec3f, rot: mat3x3f, radius: f32, t: f32, amp: f32, 
   let drift = act * 0.35 * (PI / bands);
   let dlon = (fract(u) - (0.2 + 0.6 * jx)) / cnt * TAU * cos(lat) - drift * sin(t * (1.5 + 3.0 * jy) + jx * TAU);
   let dlat = (lat - bl) - (jy - 0.5) * 0.4 * (PI / bands) - drift * cos(t * (1.2 + 3.0 * jx) + jy * TAU);
-  let rdot = (PI / bands) * (0.15 + 0.1 * act);
+  let rdot = (PI / bands) * (0.17 + 0.1 * act);
   let tw = 0.55 + 0.45 * sin(t * (1.0 + 3.0 * jx) + jy * TAU);
   let inten = smoothstep(rdot, rdot * 0.25, length(vec2f(dlon, dlat))) * tw;
   // dots read brightest at the limb, where the shell is seen edge-on
@@ -173,6 +173,7 @@ fn sdRoundBox(p: vec2f, b: vec2f, r: f32) -> f32 {
   let gz = vec2f(params.gaze.x, params.gaze.y);
   var eyeM = 0.0;
   var eyeG = 0.0;
+  var eyeS = 0.0;
   for (var i = 0; i < 2; i++) {
     let sx = select(-1.0, 1.0, i == 1);
     var ql = q - (vec2f(sx * 0.27, 0.04) + gz * vec2f(0.20, 0.15));
@@ -183,13 +184,15 @@ fn sdRoundBox(p: vec2f, b: vec2f, r: f32) -> f32 {
     let dd = sdRoundBox(ql, vec2f(hw - rr, hh - rr), rr);
     eyeM = max(eyeM, smoothstep(0.008, -0.008, dd));
     eyeG += exp(-max(dd, 0.0) * 14.0);
+    eyeS += exp(-max(dd, 0.0) * 8.0);
   }
   let facing = smoothstep(0.05, 0.4, z);
-  let eyeCol = mix(mix(vec3f(1.0), hsl2rgb(h0, 0.8, 0.9), 0.25), vec3f(1.0, 0.45, 0.4), clamp(st, 0.0, 1.0) * 0.5);
+  let eyeCol = mix(mix(vec3f(0.96), hsl2rgb(h0, 0.8, 0.85), 0.5), vec3f(1.0, 0.45, 0.4), clamp(st, 0.0, 1.0) * 0.5);
   // body is 6.25% see-through so the back of the dotted shell shows faintly
   let bodyAlpha = 0.9375;
   var col = bodyCol * inside * bodyAlpha;
-  col += eyeCol * eyeG * 0.22 * facing * inside;
+  col *= 1.0 - 0.4 * clamp(eyeS * 0.5, 0.0, 1.0) * facing * inside;
+  col += eyeCol * eyeG * 0.1 * facing * inside;
   col = mix(col, eyeCol, eyeM * facing * inside);
 
   // outer halo

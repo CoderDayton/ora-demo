@@ -38,7 +38,7 @@ in its name beside the model. The folder is scanned each time the page loads.
 | File | Holds |
 |---|---|
 | `ora.db` | Chats, documents and their full-text index (SQLite). |
-| rendered PDF pages | The page images of uploaded PDFs. |
+| `pages/<document id>/` | The uploaded PDF (`source.pdf`) and its rendered page images (`<n>.jpg`). Missing images are rendered again when asked for. |
 | `persona.json` | The orb's memory of past conversations. A corrupt file is ignored. |
 
 ## Build-time variables

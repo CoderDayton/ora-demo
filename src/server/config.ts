@@ -30,7 +30,7 @@ function port(v: unknown): number | undefined {
 
 // Extra llama-server flags: a list in the file, or a space-separated string in ORA_LLAMA_ARGS.
 function argList(envValue: string | undefined, fileValue: unknown): string[] {
-  if (envValue && envValue.trim()) return envValue.trim().split(/\s+/);
+  if (envValue?.trim()) return envValue.trim().split(/\s+/);
   if (Array.isArray(fileValue) && fileValue.every(v => typeof v === 'string')) return fileValue as string[];
   return [];
 }
@@ -43,7 +43,8 @@ function parseFile(fileText: string | null): Record<string, unknown> {
   } catch (e) {
     throw new Error(`invalid config file: ${e instanceof Error ? e.message : String(e)}`);
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('invalid config file: expected a JSON object');
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    throw new Error('invalid config file: expected a JSON object');
   return parsed as Record<string, unknown>;
 }
 

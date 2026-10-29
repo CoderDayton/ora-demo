@@ -1,21 +1,22 @@
 // Ora controller: serves the web app, owns chats/documents (SQLite), starts/stops llama-server and proxies /llama/*.
 // Local only: binds 127.0.0.1 and rejects foreign Host/Origin headers.
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createServer } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import { ASSETS } from './assets.gen.ts';
-import { buildContext } from './context.ts';
 import { configPath, loadConfig } from './config.ts';
-import { chunkText, extractDoc, isPdf, isolatePdfRendering, renderPdf } from './docs.ts';
+import { buildContext } from './context.ts';
+import { chunkText, extractDoc, isPdf } from './docs.ts';
 import { Engine, prepareModelsDir, scanModels } from './engine.ts';
+import { ingestPdf, PageRenderer } from './pages.ts';
 import { renderWorker } from './pdfium.ts';
 import { proxy } from './proxy.ts';
 import { openStore } from './store.ts';
+import { Cancel, parseTurn, Turns, transcribe } from './turn.ts';
 
 // Child mode: PDFium parses untrusted files, so uploads are rendered by this same binary in a separate process.
 if (process.argv[2] === '--render-pdf') process.exit(renderWorker(process.argv.slice(3)));
-isolatePdfRendering(process.execPath);
 
 const cfgFile = configPath(process.env);
 const config = loadConfig(process.env, existsSync(cfgFile) ? readFileSync(cfgFile, 'utf8') : null);
@@ -30,16 +31,33 @@ const MAX_DOC_CHARS = 8_000_000;
 const PAGE_PX = 1024;
 const MAX_PAGES = 200;
 const DEFAULT_BUDGET = 24000;
+const MAX_TURN = 48 * 1024 * 1024;
+const MAX_AUDIO = 16 * 1024 * 1024;
 const ALLOWED_HOSTS = [`127.0.0.1:${PORT}`, `localhost:${PORT}`];
 
 const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json', '.svg': 'image/svg+xml', '.wasm': 'application/wasm',
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json',
+  '.svg': 'image/svg+xml',
+  '.wasm': 'application/wasm',
 };
 
 prepareModelsDir(MODELS_DIR);
 const store = openStore(DATA);
+const pages = new PageRenderer(store, process.execPath);
 const engine = new Engine(LLAMA_BIN, LLAMA_PORT, MODELS_DIR, config.llamaArgs);
+const turns = new Turns({ store, pages, llamaPort: LLAMA_PORT, slots: () => engine.slots() });
+
+// Cancelled when the browser goes away before the response is finished, which stops the model's work too.
+function cancelOnClose(res: ServerResponse): Cancel {
+  const cancel = new Cancel();
+  res.on('close', () => {
+    if (!res.writableEnded) cancel.cancel();
+  });
+  return cancel;
+}
 
 class HttpError extends Error {
   code: number;
@@ -70,8 +88,12 @@ function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
       }
       chunks.push(c);
     });
-    req.on('end', () => { if (!dead) ok(Buffer.concat(chunks)); });
-    req.on('error', (e: Error) => { if (!dead) fail(e); });
+    req.on('end', () => {
+      if (!dead) ok(Buffer.concat(chunks));
+    });
+    req.on('error', (e: Error) => {
+      if (!dead) fail(e);
+    });
   });
 }
 
@@ -154,7 +176,10 @@ async function chatRoute(req: IncomingMessage, res: ServerResponse, url: URL, m:
       store.renameChat(id, b.title.trim().slice(0, 120));
       return send(res, 200, store.getChat(id));
     }
-    if (method === 'DELETE') { store.deleteChat(id); return send(res, 200, { ok: true }); }
+    if (method === 'DELETE') {
+      store.deleteChat(id);
+      return send(res, 200, { ok: true });
+    }
     throw new HttpError(405, 'method not allowed');
   }
 
@@ -168,18 +193,17 @@ async function chatRoute(req: IncomingMessage, res: ServerResponse, url: URL, m:
     const name = (url.searchParams.get('name') ?? 'document').replace(/[\\/]/g, '_').slice(0, 200);
     const body = new Uint8Array(await readBody(req, MAX_UPLOAD));
     if (isPdf(body)) {
-      let pages: Uint8Array[];
+      // Returns once the page count and text are read; page images are rendered in the background.
+      const px = Math.min(2400, Math.max(512, Math.round(Number(url.searchParams.get('px') ?? PAGE_PX)) || PAGE_PX));
+      let meta: Awaited<ReturnType<typeof ingestPdf>>;
       try {
-        const px = Math.min(2400, Math.max(512, Math.round(Number(url.searchParams.get('px') ?? PAGE_PX)) || PAGE_PX));
-        pages = await renderPdf(name, body, px, MAX_PAGES);
+        meta = await ingestPdf(store, pages, id, name, body, px, MAX_PAGES);
       } catch (e) {
         throw new HttpError(422, e instanceof Error ? e.message : String(e));
       }
-      const meta = store.addDoc(id, name, 'pdf', pages.length, []);
-      store.addPages(meta.id, pages);
       return send(res, 200, meta);
     }
-    let ex;
+    let ex: Awaited<ReturnType<typeof extractDoc>>;
     try {
       ex = await extractDoc(name, body);
     } catch (e) {
@@ -221,7 +245,10 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const b = await readJson(req, 65536);
     try {
       await engine.start({
-        model: String(b.model ?? ''), mmproj: String(b.mmproj ?? ''), ctx: Number(b.ctx), reasoning: String(b.reasoning ?? 'off'),
+        model: String(b.model ?? ''),
+        mmproj: String(b.mmproj ?? ''),
+        ctx: Number(b.ctx),
+        reasoning: String(b.reasoning ?? 'off'),
         parallel: Number(b.parallel ?? 2),
       });
     } catch (e) {
@@ -229,7 +256,44 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     }
     return send(res, 200, { ok: true });
   }
-  if (p === '/api/stop' && method === 'POST') { await engine.stop(); return send(res, 200, { ok: true }); }
+  if (p === '/api/stop' && method === 'POST') {
+    await engine.stop();
+    return send(res, 200, { ok: true });
+  }
+
+  if (p === '/api/turn' && method === 'POST') {
+    const b = await readJson(req, MAX_TURN);
+    let t: ReturnType<typeof parseTurn>;
+    try {
+      t = parseTurn(b);
+    } catch (e) {
+      throw new HttpError(400, e instanceof Error ? e.message : String(e));
+    }
+    if (t.chatId !== null && !store.getChat(t.chatId)) throw new HttpError(404, 'no such chat');
+    const cancel = cancelOnClose(res);
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
+    await turns.run(
+      t,
+      (e: Record<string, unknown>) => {
+        res.write(`data: ${JSON.stringify(e)}\n\n`);
+      },
+      cancel,
+    );
+    res.end();
+    return;
+  }
+  if (p === '/api/asr' && method === 'POST') {
+    const b = await readJson(req, MAX_AUDIO);
+    if (typeof b.audio !== 'string' || !b.audio) throw new HttpError(400, 'audio required');
+    const cancel = cancelOnClose(res);
+    let text: string;
+    try {
+      text = await transcribe(LLAMA_PORT, engine.slots(), b.audio, cancel);
+    } catch (e) {
+      throw new HttpError(502, e instanceof Error ? e.message : String(e));
+    }
+    return send(res, 200, { text });
+  }
 
   if (p === '/api/persona') {
     const file = join(DATA, 'persona.json');
@@ -245,7 +309,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
 
   const pm = p.match(/^\/api\/docs\/(\d+)\/pages\/(\d+)$/);
   if (pm && method === 'GET') {
-    const img = store.readPage(Number(pm[1]), Number(pm[2]));
+    const img = await pages.page(Number(pm[1]), Number(pm[2]));
     if (!img) throw new HttpError(404, 'no such page');
     res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'private, max-age=86400' });
     res.end(Buffer.from(img));

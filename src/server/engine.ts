@@ -1,13 +1,29 @@
-import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
-export interface ModelInfo { path: string; name: string; sizeMB: number; mmproj: string[] }
-export interface StartOpts { model: string; mmproj: string; ctx: number; reasoning: string; parallel: number }
+export interface ModelInfo {
+  path: string;
+  name: string;
+  sizeMB: number;
+  mmproj: string[];
+}
+export interface StartOpts {
+  model: string;
+  mmproj: string;
+  ctx: number;
+  reasoning: string;
+  parallel: number;
+}
 export interface EngineStatus {
-  state: string; model: string | null; pid: number | null; startedAt: number;
-  exit: string | null; args: string[]; logs: string[];
+  state: string;
+  model: string | null;
+  pid: number | null;
+  startedAt: number;
+  exit: string | null;
+  args: string[];
+  logs: string[];
 }
 
 const SKIP_DIRS = ['ora', 'public'];
@@ -63,7 +79,11 @@ export function scanModels(root: string): ModelInfo[] {
   const out: ModelInfo[] = [];
   const walk = (dir: string, depth: number): void => {
     let names: string[] = [];
-    try { names = readdirSync(dir); } catch { return; }
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
     const ggufs = names.filter(n => n.endsWith('.gguf'));
     const mmprojs = ggufs.filter(n => /mmproj/i.test(n)).map(n => join(dir, n));
     for (const n of ggufs) {
@@ -76,7 +96,11 @@ export function scanModels(root: string): ModelInfo[] {
       if (n.startsWith('.') || SKIP_DIRS.includes(n)) continue;
       const sub = join(dir, n);
       let isDir = false;
-      try { isDir = statSync(sub).isDirectory(); } catch { isDir = false; }
+      try {
+        isDir = statSync(sub).isDirectory();
+      } catch {
+        isDir = false;
+      }
       if (isDir) walk(sub, depth + 1);
     }
   };
@@ -93,24 +117,42 @@ export class Engine {
   private startedAt = 0;
   private exit: string | null = null;
   private logs: string[] = [];
+  private np = 1;
 
   private bin: string;
   private port: number;
   private modelsDir: string;
   private extraArgs: string[];
+  private signal: (pid: number, sig: string) => void;
 
-  constructor(bin: string, port: number, modelsDir: string, extraArgs: string[]) {
+  // `signal` sends a signal to a process; tests replace it to observe what would be sent.
+  constructor(bin: string, port: number, modelsDir: string, extraArgs: string[], signal?: (pid: number, sig: string) => void) {
     this.bin = bin;
     this.port = port;
     this.modelsDir = modelsDir;
     this.extraArgs = extraArgs;
+    this.signal =
+      signal ??
+      ((pid: number, sig: string): void => {
+        process.kill(pid, sig);
+      });
   }
 
   status(): EngineStatus {
     return {
-      state: this.state, model: this.model, pid: this.child?.pid ?? null, startedAt: this.startedAt,
-      exit: this.exit, args: this.args, logs: this.logs.slice(-60),
+      state: this.state,
+      model: this.model,
+      pid: this.child?.pid ?? null,
+      startedAt: this.startedAt,
+      exit: this.exit,
+      args: this.args,
+      logs: this.logs.slice(-60),
     };
+  }
+
+  // How many requests llama-server serves at once, each with its own cached prompt.
+  slots(): number {
+    return this.np;
   }
 
   private log(line: string): void {
@@ -122,8 +164,13 @@ export class Engine {
     while (this.child === child && this.state === 'starting') {
       try {
         const r = await fetch(`http://127.0.0.1:${this.port}/health`);
-        if (r.ok) { this.state = 'ready'; return; }
-      } catch { /* not up yet */ }
+        if (r.ok) {
+          this.state = 'ready';
+          return;
+        }
+      } catch {
+        /* not up yet */
+      }
       await new Promise<void>(res => setTimeout(res, 500));
     }
   }
@@ -131,12 +178,26 @@ export class Engine {
   stop(): Promise<void> {
     const child = this.child;
     if (!child) return Promise.resolve();
+    // A child that failed to spawn has no pid and only ever emits 'error'. Pid 0 would signal Ora's own group.
+    const pid = child.pid ?? 0;
+    if (pid <= 0) {
+      if (this.child === child) this.child = null;
+      return Promise.resolve();
+    }
     return new Promise<void>(resolve => {
-      const pid = child.pid ?? 0;
-      const t = setTimeout(() => process.kill(pid, 'SIGKILL'), 6000);
-      child.once('exit', () => { clearTimeout(t); resolve(); });
+      const t = setTimeout(() => this.signal(pid, 'SIGKILL'), 6000);
+      const done = (): void => {
+        clearTimeout(t);
+        resolve();
+      };
+      child.once('exit', done);
+      child.once('error', done);
       this.state = 'stopping';
-      try { process.kill(pid, 'SIGTERM'); } catch { /* already exited; the exit event resolves */ }
+      try {
+        this.signal(pid, 'SIGTERM');
+      } catch {
+        /* already exited; the exit event resolves */
+      }
     });
   }
 
@@ -150,14 +211,31 @@ export class Engine {
     if (!(np >= 1 && np <= 8)) throw new Error('parallel out of range');
 
     await this.stop();
-    const args = ['-m', m.path, '-ngl', '99', '-c', String(ctx), '-np', String(np), '--kv-unified',
-      '--reasoning', o.reasoning === 'auto' ? 'auto' : 'off', '--metrics', '--host', '127.0.0.1', '--port', String(this.port)];
+    const args = [
+      '-m',
+      m.path,
+      '-ngl',
+      '99',
+      '-c',
+      String(ctx),
+      '-np',
+      String(np),
+      '--kv-unified',
+      '--reasoning',
+      o.reasoning === 'auto' ? 'auto' : 'off',
+      '--metrics',
+      '--host',
+      '127.0.0.1',
+      '--port',
+      String(this.port),
+    ];
     if (o.mmproj) args.push('--mmproj', o.mmproj);
     args.push(...this.extraArgs);
 
     this.logs = [];
     this.exit = null;
     this.model = m.name;
+    this.np = np;
     this.args = args;
     this.startedAt = Date.now();
     this.state = 'starting';
@@ -194,6 +272,6 @@ export class Engine {
 
   kill(): void {
     const pid = this.child?.pid ?? 0;
-    if (pid > 0) process.kill(pid, 'SIGTERM');
+    if (pid > 0) this.signal(pid, 'SIGTERM');
   }
 }

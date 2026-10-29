@@ -1,7 +1,7 @@
 import assert from 'node:assert';
 import { test } from 'node:test';
-import { calibrate, fitHistory, toApi } from '../src/web/history.ts';
-import type { Msg } from '../src/web/state.ts';
+import type { Msg } from '../src/server/prompt.ts';
+import { calibrate, fitHistory, toApi } from '../src/server/prompt.ts';
 
 const cost = { charsPerToken: 4, imageTokens: 100, scale: 1 };
 const img = { type: 'image_url' as const, image_url: { url: 'data:image/jpeg;base64,xx' } };
@@ -19,7 +19,7 @@ test('a history that fits is sent whole', () => {
 
 test('old images are replaced by a note before any message is dropped', () => {
   const h = [withImage('first'), bot('a cat'), user('and now?'), bot('ok'), user('thanks')];
-  const r = fitHistory(h, 60, cost);
+  const r = fitHistory(h, 70, cost);
   assert.strictEqual(r.msgs.length, 5);
   assert.strictEqual(r.stripped, 1);
   assert.strictEqual(r.dropped, 0);

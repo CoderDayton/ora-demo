@@ -21,6 +21,8 @@
     { "name": "oraPdfCopy", "symbol": "ora_pdf_copy", "params": ["mutable-bytes"], "returns": "i32" },
     { "name": "oraPdfRenderRaw", "symbol": "ora_pdf_render_raw", "params": ["i32", "i32"], "returns": "i32" },
     { "name": "oraPdfCopyRaw", "symbol": "ora_pdf_copy_raw", "params": ["mutable-bytes"], "returns": "i32" },
+    { "name": "oraPdfPageText", "symbol": "ora_pdf_page_text", "params": ["i32"], "returns": "i32" },
+    { "name": "oraPdfCopyText", "symbol": "ora_pdf_copy_text", "params": ["mutable-bytes"], "returns": "i32" },
     { "name": "oraPdfClose", "symbol": "ora_pdf_close", "params": [], "returns": "i32" }
   ],
   "libraries": ["./build/liborasql.a"]

@@ -58,6 +58,10 @@ static struct {
     void (*bitmap_destroy)(void *);
     void (*render)(void *, void *, int, int, int, int, int, int);
     unsigned long (*last_error)(void);
+    void *(*text_load)(void *);
+    int (*text_count)(void *);
+    int (*text_get)(void *, int, int, unsigned short *);
+    void (*text_close)(void *);
 } P;
 
 static int loaded;
@@ -159,6 +163,10 @@ static int load_lib(void) {
     SYM(bitmap_destroy, "FPDFBitmap_Destroy");
     SYM(render, "FPDF_RenderPageBitmap");
     SYM(last_error, "FPDF_GetLastError");
+    SYM(text_load, "FPDFText_LoadPage");
+    SYM(text_count, "FPDFText_CountChars");
+    SYM(text_get, "FPDFText_GetText");
+    SYM(text_close, "FPDFText_ClosePage");
 #undef SYM
     P.init();
     loaded = 1;
@@ -279,5 +287,76 @@ int32_t ora_pdf_copy_raw(uint8_t *out, size_t cap) {
 int32_t ora_pdf_copy(uint8_t *out, size_t cap) {
     size_t n = jpg_len < cap ? jpg_len : cap;
     memcpy(out, jpg, n);
+    return (int32_t)n;
+}
+
+enum { MAX_TEXT_CHARS = 1 << 16 };
+static uint8_t *txt;
+static size_t txt_len;
+
+// UTF-16 from PDFium to UTF-8 in txt (sized for 3 bytes per unit). Unpaired surrogates become U+FFFD.
+static void utf16_to_txt(const unsigned short *u, int n) {
+    txt_len = 0;
+    for (int i = 0; i < n; i++) {
+        uint32_t c = u[i];
+        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < n && u[i + 1] >= 0xDC00 && u[i + 1] <= 0xDFFF) {
+            c = 0x10000 + ((c - 0xD800) << 10) + (u[i + 1] - 0xDC00);
+            i++;
+        } else if (c >= 0xD800 && c <= 0xDFFF) {
+            c = 0xFFFD;
+        }
+        if (c < 0x80) {
+            txt[txt_len++] = (uint8_t)c;
+        } else if (c < 0x800) {
+            txt[txt_len++] = (uint8_t)(0xC0 | (c >> 6));
+            txt[txt_len++] = (uint8_t)(0x80 | (c & 0x3F));
+        } else if (c < 0x10000) {
+            txt[txt_len++] = (uint8_t)(0xE0 | (c >> 12));
+            txt[txt_len++] = (uint8_t)(0x80 | ((c >> 6) & 0x3F));
+            txt[txt_len++] = (uint8_t)(0x80 | (c & 0x3F));
+        } else {
+            txt[txt_len++] = (uint8_t)(0xF0 | (c >> 18));
+            txt[txt_len++] = (uint8_t)(0x80 | ((c >> 12) & 0x3F));
+            txt[txt_len++] = (uint8_t)(0x80 | ((c >> 6) & 0x3F));
+            txt[txt_len++] = (uint8_t)(0x80 | (c & 0x3F));
+        }
+    }
+}
+
+// Extracts one page's text layer as UTF-8 and keeps it until ora_pdf_copy_text. Returns its byte length (0 for a
+// page without text), or a negative error. The text only ranks pages; the model is sent page images.
+int32_t ora_pdf_page_text(int32_t index) {
+    if (!doc) return ERR_NO_DOC;
+    if (index < 0 || index >= P.page_count(doc)) return ERR_BAD_PAGE;
+    void *page = P.load_page(doc, index);
+    if (!page) return ERR_LOAD_PAGE;
+    txt_len = 0;
+    int result = 0;
+    void *tp = P.text_load(page);
+    if (tp) {
+        int n = P.text_count(tp);
+        if (n > MAX_TEXT_CHARS) n = MAX_TEXT_CHARS;
+        if (n > 0) {
+            unsigned short *u = malloc(((size_t)n + 1) * sizeof *u);
+            uint8_t *grown = realloc(txt, (size_t)n * 3 + 1);
+            if (grown) txt = grown;
+            if (u && grown) {
+                int got = P.text_get(tp, 0, n, u);
+                if (got > 0 && u[got - 1] == 0) got--;
+                utf16_to_txt(u, got > n ? n : got);
+            } else {
+                result = ERR_ENCODE;
+            }
+            free(u);
+        }
+        P.text_close(tp);
+    }
+    P.close_page(page);
+    return result < 0 ? result : (int32_t)txt_len;
+}
+
+int32_t ora_pdf_copy_text(uint8_t *out, size_t cap) {
+    size_t n = txt_len < cap ? txt_len : cap;
+    if (n) memcpy(out, txt, n);
     return (int32_t)n;
 }

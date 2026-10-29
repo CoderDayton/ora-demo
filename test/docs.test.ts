@@ -1,10 +1,10 @@
 import assert from 'node:assert';
-import { test } from 'node:test';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { chunkText, extractDoc, isPdf, renderPdf } from '../src/server/docs.ts';
-import { renderRaw, renderWorker } from '../src/server/pdfium.ts';
+import { test } from 'node:test';
+import { chunkText, extractDoc, isPdf } from '../src/server/docs.ts';
+import { pageTexts, renderPages, renderRaw, renderWorker } from '../src/server/pdfium.ts';
 
 function same(actual: unknown, expected: unknown): void {
   assert.equal(JSON.stringify(actual), JSON.stringify(expected));
@@ -88,47 +88,99 @@ test('isPdf recognises the magic bytes only', () => {
 
 test('extractDoc: refuses PDFs, which are rendered to images instead', async () => {
   const msg = await failure(extractDoc('a.pdf', tinyPdf('Hello')));
-  assert.ok(/renderPdf|image/i.test(msg));
+  assert.ok(/image/i.test(msg));
 });
 
-test('renderPdf: one JPEG per page, scaled to the requested size', async () => {
-  const pages = await renderPdf('a.pdf', tinyPdf('Hello PDF world'), 512, 50);
-  same(pages.length, 1);
-  const p = pages[0] as Uint8Array;
+test('renderPages: one JPEG per page in the range, scaled to the requested size', () => {
+  const got: number[] = [];
+  const jpgs: Uint8Array[] = [];
+  const n = renderPages(tinyPdf('Hello PDF world'), 512, 1, 50, 80, (p: number, jpg: Uint8Array) => {
+    got.push(p);
+    jpgs.push(jpg);
+  });
+  same([n, got], [1, [1]]);
+  const p = jpgs[0] as Uint8Array;
   same([p[0], p[1]], [0xff, 0xd8]);
   assert.ok(p.length > 500);
 });
 
-test('renderPdf: respects the page limit', async () => {
-  const pages = await renderPdf('a.pdf', tinyPdf('Hello'), 256, 0);
-  same(pages.length, 0);
+test('renderPages: a range past the last page renders nothing', () => {
+  same(
+    renderPages(tinyPdf('Hello'), 256, 2, 5, 80, () => undefined),
+    0,
+  );
 });
 
-test('renderPdf: rejects data that is not a readable PDF', async () => {
-  const msg = await failure(renderPdf('bad.pdf', enc('%PDF-1.4\nnot really a pdf'), 512, 50));
-  assert.ok(/unreadable|pdf/i.test(msg));
+test('renderPages: rejects data that is not a readable PDF', () => {
+  let msg = '';
+  try {
+    renderPages(enc('%PDF-1.4\nnot really a pdf'), 512, 1, 5, 80, () => undefined);
+  } catch (e) {
+    msg = e instanceof Error ? e.message : String(e);
+  }
+  assert.ok(/pdf/i.test(msg), msg);
 });
 
-test('renderWorker: writes numbered JPEGs and returns 0', () => {
+test("pageTexts: the page count and each page's text layer, used only to choose pages", () => {
+  const t = pageTexts(tinyPdf('Orbital launch window'), 50);
+  same(t.pages, 1);
+  same(
+    t.text.map(s => s.trim()),
+    ['Orbital launch window'],
+  );
+});
+
+test('pageTexts: a page with no text layer gives an empty string', () => {
+  const t = pageTexts(boxPdf(), 50);
+  same(t.text, ['']);
+});
+
+test('pageTexts: unreadable data throws', () => {
+  let msg = '';
+  try {
+    pageTexts(enc('%PDF-1.4\nnot really a pdf'), 5);
+  } catch (e) {
+    msg = e instanceof Error ? e.message : String(e);
+  }
+  assert.ok(msg.length > 0);
+});
+
+test('renderWorker pages: writes <n>.jpg for each page in the range and returns 0', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ora-worker-'));
   writeFileSync(join(dir, 'in.pdf'), tinyPdf('Worker page'));
-  same(renderWorker([join(dir, 'in.pdf'), dir, '384', '5']), 0);
-  const jpgs = readdirSync(dir).filter(n => n.endsWith('.jpg'));
-  same(jpgs, ['0000.jpg']);
-  const b = readFileSync(join(dir, '0000.jpg'));
+  same(renderWorker(['pages', join(dir, 'in.pdf'), dir, '384', '1', '5']), 0);
+  same(
+    readdirSync(dir).filter(n => n.endsWith('.jpg')),
+    ['1.jpg'],
+  );
+  const b = readFileSync(join(dir, '1.jpg'));
   same([b[0], b[1]], [0xff, 0xd8]);
 });
 
-test('renderWorker: an unreadable PDF returns 2 and explains in error.txt', () => {
+test("renderWorker info: writes the page count and each page's text", () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ora-worker-'));
+  writeFileSync(join(dir, 'in.pdf'), tinyPdf('Worker words'));
+  same(renderWorker(['info', join(dir, 'in.pdf'), join(dir, 'info.json'), '200']), 0);
+  const v = JSON.parse(readFileSync(join(dir, 'info.json'), 'utf8')) as Record<string, unknown>;
+  same(v.pages, 1);
+  assert.ok(JSON.stringify(v.text).includes('Worker words'));
+});
+
+test('renderWorker: an unreadable PDF returns 2 and writes no pages', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ora-worker-'));
   writeFileSync(join(dir, 'in.pdf'), enc('%PDF-1.4\nnot really a pdf'));
-  same(renderWorker([join(dir, 'in.pdf'), dir, '384', '5']), 2);
-  assert.ok(existsSync(join(dir, 'error.txt')));
-  assert.ok(readFileSync(join(dir, 'error.txt'), 'utf8').length > 0);
+  same(renderWorker(['pages', join(dir, 'in.pdf'), dir, '384', '1', '5']), 2);
+  same(
+    readdirSync(dir).filter(n => n.endsWith('.jpg')),
+    [],
+  );
+  assert.ok(!existsSync(join(dir, 'info.json')));
 });
 
 test('renderWorker: missing or invalid arguments return 2', () => {
   same(renderWorker(['only-one']), 2);
+  same(renderWorker(['pages', 'in.pdf', '.', '0', '1', '1']), 2);
+  same(renderWorker(['shred', 'in.pdf', '.']), 2);
 });
 
 // A page with only two filled boxes, so any misplaced, smeared or colour-swapped pixel is detectable.
@@ -157,8 +209,12 @@ test('renderRaw: boxes land where the page puts them, in the right colours, with
   const r = renderRaw(boxPdf(), 0, 1024);
   same([r.width, r.height], [791, 1024]);
   const s = 1024 / 792;
-  const box = (x0: number, y0: number, x1: number, y1: number): number[] =>
-    [Math.round(x0 * s), Math.round((792 - y1) * s), Math.round(x1 * s), Math.round((792 - y0) * s)];
+  const box = (x0: number, y0: number, x1: number, y1: number): number[] => [
+    Math.round(x0 * s),
+    Math.round((792 - y1) * s),
+    Math.round(x1 * s),
+    Math.round((792 - y0) * s),
+  ];
   const black = box(400, 100, 550, 250);
   const red = box(72, 100, 172, 200);
   const px = (x: number, y: number): number[] => {
@@ -168,13 +224,21 @@ test('renderRaw: boxes land where the page puts them, in the right colours, with
   const within = (x: number, y: number, b: number[], pad: number): boolean =>
     x >= (b[0] as number) - pad && x < (b[2] as number) + pad && y >= (b[1] as number) - pad && y < (b[3] as number) + pad;
 
-  let blackHits = 0, blackTotal = 0, redHits = 0, redTotal = 0, stray = 0;
+  let blackHits = 0,
+    blackTotal = 0,
+    redHits = 0,
+    redTotal = 0,
+    stray = 0;
   for (let y = 0; y < r.height; y++) {
     for (let x = 0; x < r.width; x++) {
       const [R, G, B] = px(x, y) as [number, number, number];
-      if (within(x, y, black, 0)) { blackTotal++; if (R < 40 && G < 40 && B < 40) blackHits++; }
-      else if (within(x, y, red, 0)) { redTotal++; if (R > 215 && G < 40 && B < 40) redHits++; }
-      else if (!within(x, y, black, 4) && !within(x, y, red, 4) && Math.min(R, G, B) < 200) stray++;
+      if (within(x, y, black, 0)) {
+        blackTotal++;
+        if (R < 40 && G < 40 && B < 40) blackHits++;
+      } else if (within(x, y, red, 0)) {
+        redTotal++;
+        if (R > 215 && G < 40 && B < 40) redHits++;
+      } else if (!within(x, y, black, 4) && !within(x, y, red, 4) && Math.min(R, G, B) < 200) stray++;
     }
   }
   assert.ok(blackHits / blackTotal > 0.99, `black box ${blackHits}/${blackTotal}`);

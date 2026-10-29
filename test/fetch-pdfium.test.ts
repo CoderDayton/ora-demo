@@ -1,8 +1,8 @@
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { assetUrl, checkSha, platformKey } from '../scripts/fetch-pdfium.ts';
 import type { Lock } from '../scripts/fetch-pdfium.ts';
+import { assetUrl, checkSha, platformKey } from '../scripts/fetch-pdfium.ts';
 
 const lock = JSON.parse(readFileSync(new URL('../ffi/pdfium.lock.json', import.meta.url), 'utf8')) as Lock;
 

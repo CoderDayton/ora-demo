@@ -2,11 +2,28 @@ import { effect, frame, init, surface } from 'vgpu';
 import orbShader from './orb.wgsl';
 
 export interface OrbParams {
-  res: [number, number]; center: [number, number]; time: number; radius: number; energy: number; hue: number; sat: number;
-  pulse: number; spin: number; ctx: number; kv: number; rate: number; inward: number; ages: number[]; strs: number[];
-  eye: number[]; gaze: number[];
+  res: [number, number];
+  center: [number, number];
+  time: number;
+  radius: number;
+  energy: number;
+  hue: number;
+  sat: number;
+  pulse: number;
+  spin: number;
+  ctx: number;
+  kv: number;
+  rate: number;
+  inward: number;
+  ages: number[];
+  strs: number[];
+  eye: number[];
+  gaze: number[];
 }
-export interface GpuOrb { size(): [number, number]; draw(params: OrbParams): void }
+export interface GpuOrb {
+  size(): [number, number];
+  draw(params: OrbParams): void;
+}
 
 // Resolves to null when WebGPU is unavailable, so the caller can fall back to canvas 2d.
 export async function createGpuOrb(canvas: HTMLCanvasElement): Promise<GpuOrb | null> {

@@ -40,7 +40,10 @@ test('prepareModelsDir leaves an existing folder and its models alone', () => {
   const dir = tmp();
   writeFileSync(join(dir, 'solo-Q8_0.gguf'), 'x');
   prepareModelsDir(dir);
-  same(scanModels(dir).map(m => m.name), ['solo-Q8_0.gguf']);
+  same(
+    scanModels(dir).map(m => m.name),
+    ['solo-Q8_0.gguf'],
+  );
 });
 
 test('scanModels finds models flat or in subfolders and pairs a projector with its own folder', () => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert';
-import { createServer, request } from 'node:http';
 import type { Server } from 'node:http';
+import { createServer, request } from 'node:http';
 import { test } from 'node:test';
 import { proxy } from '../src/server/proxy.ts';
 
@@ -12,7 +12,9 @@ function get(port: number, path: string, abortAfterMs = 0): Promise<string> {
   return new Promise((ok, fail) => {
     const r = request({ host: '127.0.0.1', port, path }, res => {
       let body = '';
-      res.on('data', (d: Buffer) => { body += d.toString(); });
+      res.on('data', (d: Buffer) => {
+        body += d.toString();
+      });
       res.on('end', () => ok(body));
       res.on('error', () => ok('aborted'));
     });
@@ -25,7 +27,10 @@ function get(port: number, path: string, abortAfterMs = 0): Promise<string> {
 test('a client that hangs up mid-stream does not crash the proxy, and the next request still works', async () => {
   // Stands in for llama-server: streams slowly until the connection goes away.
   const upstream = createServer((req, res) => {
-    if (req.url === '/health') { res.end('ok'); return; }
+    if (req.url === '/health') {
+      res.end('ok');
+      return;
+    }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const t = setInterval(() => res.write('data: {}\n\n'), 20);
     res.on('close', () => clearInterval(t));

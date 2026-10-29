@@ -1,18 +1,8 @@
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { JPEG_QUALITY, renderPages } from './pdfium.ts';
-
-const WORKER_TIMEOUT_MS = 120_000;
-let workerExe: string | null = null;
-
-// Makes renderPdf run PDFium in a child process (this binary started with --render-pdf) instead of in-process.
-export function isolatePdfRendering(exe: string): void {
-  workerExe = exe;
+// Text documents. PDFs are handled in pages.ts.
+export interface Extracted {
+  kind: 'text';
+  text: string;
 }
-
-export interface Extracted { kind: 'text'; text: string }
 
 function splitLong(s: string, size: number, overlap: number): string[] {
   const out: string[] = [];
@@ -35,14 +25,36 @@ function splitLong(s: string, size: number, overlap: number): string[] {
 export function chunkText(text: string, size: number, overlap: number): string[] {
   const out: string[] = [];
   let cur = '';
-  const flush = (): void => { if (cur) out.push(cur); cur = ''; };
-  for (const p of text.split(/\n\s*\n/).map(x => x.trim()).filter(Boolean)) {
-    if (p.length > size) { flush(); out.push(...splitLong(p, size, overlap)); continue; }
+  const flush = (): void => {
+    if (cur) out.push(cur);
+    cur = '';
+  };
+  for (const p of text
+    .split(/\n\s*\n/)
+    .map(x => x.trim())
+    .filter(Boolean)) {
+    if (p.length > size) {
+      flush();
+      out.push(...splitLong(p, size, overlap));
+      continue;
+    }
     if (cur && cur.length + 2 + p.length > size) flush();
     cur = cur ? `${cur}\n\n${p}` : p;
   }
   flush();
   return out;
+}
+
+const MIN_OVERLAP = 16;
+const MAX_OVERLAP = 400;
+
+// Joins two neighbouring chunks. Chunks cut from one long paragraph share an overlap, which appears once; chunks
+// that were whole paragraphs get back the blank line between them.
+export function joinChunks(a: string, b: string): string {
+  for (let k = Math.min(MAX_OVERLAP, a.length, b.length); k >= MIN_OVERLAP; k--) {
+    if (a.endsWith(b.slice(0, k))) return a + b.slice(k);
+  }
+  return `${a}\n\n${b}`;
 }
 
 export function isPdf(b: Uint8Array): boolean {
@@ -51,37 +63,9 @@ export function isPdf(b: Uint8Array): boolean {
 
 // PDFs go to the vision model as page images; only plain text is extracted.
 export async function extractDoc(name: string, bytes: Uint8Array): Promise<Extracted> {
-  if (isPdf(bytes)) throw new Error(`${name}: PDFs are rendered to images with renderPdf, not extracted as text`);
+  if (isPdf(bytes)) throw new Error(`${name}: PDFs are sent as page images, not extracted as text`);
   if (bytes.subarray(0, 8000).includes(0)) throw new Error(`${name}: binary file, unsupported (use text or PDF)`);
   const text = new TextDecoder().decode(bytes).replace(/\r\n?/g, '\n');
   if (!text.trim()) throw new Error(`${name}: empty`);
   return { kind: 'text', text };
-}
-
-// Renders up to maxPages pages as JPEGs whose longest side is maxPx.
-export async function renderPdf(name: string, bytes: Uint8Array, maxPx: number, maxPages: number): Promise<Uint8Array[]> {
-  if (maxPages <= 0) return [];
-  try {
-    return workerExe === null ? renderPages(bytes, maxPx, maxPages, JPEG_QUALITY) : renderInChild(workerExe, bytes, maxPx, maxPages);
-  } catch (e) {
-    throw new Error(`${name}: unreadable PDF (${e instanceof Error ? e.message : String(e)})`);
-  }
-}
-
-function renderInChild(exe: string, bytes: Uint8Array, maxPx: number, maxPages: number): Uint8Array[] {
-  const dir = mkdtempSync(join(tmpdir(), 'ora-pdf-'));
-  try {
-    writeFileSync(join(dir, 'in.pdf'), bytes);
-    try {
-      execFileSync(exe, ['--render-pdf', join(dir, 'in.pdf'), dir, String(maxPx), String(maxPages)], { stdio: 'ignore', timeout: WORKER_TIMEOUT_MS });
-    } catch {
-      const why = existsSync(join(dir, 'error.txt')) ? readFileSync(join(dir, 'error.txt'), 'utf8') : 'the PDF engine crashed or timed out on this file';
-      throw new Error(why);
-    }
-    const files = readdirSync(dir).filter(n => n.endsWith('.jpg')).sort();
-    if (!files.length) throw new Error('no pages rendered');
-    return files.map(f => new Uint8Array(readFileSync(join(dir, f))));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 }

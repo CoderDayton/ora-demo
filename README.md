@@ -18,8 +18,9 @@ models. Nothing is installed beside it: the web app, SQLite and the PDF renderer
 Linux x86-64 build).
 
 The orb is a glass sphere with eyes and a dotted shell. Its mood, colour and motion follow the model's load, context
-use and the conversation, and its memory of past conversations persists between runs. PDFs go to the model as
-page images, not extracted text: a 21-page arXiv paper uploads in about 0.2 s (one run, Linux x86-64). Ora
+use and the conversation, and its memory of past conversations persists between runs. With speech on, a reply's text
+appears sentence by sentence as each one is spoken. PDFs go to the model as
+page images, not extracted text, and are rendered in the background so an upload does not stall the chat. Ora
 loses to hosted chat apps on model quality and on platforms, see [When not to use this](#when-not-to-use-this).
 
 ## Install and privacy
@@ -60,7 +61,8 @@ on `PATH`. Settings, the data folder and every environment variable are in
 
 Drop text files or PDFs onto the chat. Text is split into chunks and found again by full-text search (SQLite
 FTS5, bm25 ranking), so large files work. PDFs are rendered at 1024, 1536 or 2048 px on the longest side, up to
-200 pages, and sent to a vision model. Larger pages help small print and cost more tokens per page. Measured with
+200 pages. Each question sends the pages whose text matches it (or the pages typed in the box beside the document) to
+a vision model. Larger pages help small print and cost more tokens per page. Measured with
 a 2B model: printed numbers are read well, values estimated from an unlabelled chart are not.
 
 ## When not to use this
@@ -70,7 +72,7 @@ a 2B model: printed numbers are read well, values estimated from an unlabelled c
 | You want a product you can depend on | A maintained chat app | Ora is a demo of the model and may change or break. |
 | You want a hosted or multi-user service | A hosted chat product | Ora serves one user on localhost and has no accounts or TLS. |
 | You need a prebuilt binary | A release of llama.cpp's own web UI | Ora is built from source. |
-| Your model has no vision support and you need PDF text | A text-extraction tool | Ora sends PDF pages as images and never extracts text. |
+| Your model has no vision support and you need PDF text | A text-extraction tool | Ora sends PDF pages as images; their text is read only to choose which pages to send. |
 | You need Windows, macOS or arm64 to work today | Run on Linux x86-64 | The other platforms have never been run. |
 
 ## Contributing
@@ -82,7 +84,15 @@ npm install      # also installs the git hooks (lefthook)
 npm test         # builds the native library, then runs every test, including a pixel check of PDF rendering
 npm run typecheck
 npm run build
+npm run check    # Biome: format, import order and lint, read-only
+npm run check:fix  # the same, applying safe fixes
 ```
+
+Formatting and linting use [Biome](https://biomejs.dev) 2.6.4, configured in `biome.json` to the existing style:
+2-space indent, single quotes, semicolons, trailing commas, line width 140. It covers `src/`, `test/`, `scripts/`
+and the root JSON files (not the `.wgsl` shaders or `*.gen.json`). `npm run lint` and `npm run format` run the two
+halves alone. The rules `noDescendingSpecificity` and `noImportantStyles` are off: the stylesheet scopes its rules
+by element, and `body.no-anim` and the desktop layout rely on `!important`. `npm run check` is not in the hooks.
 
 Before each commit the hooks run the type check and the fast unit tests. Before each push they run the full
 suite and a build, about 30 s on Linux x86-64. `scriptc` supports a subset of TypeScript, so run `npm run build`
@@ -91,7 +101,7 @@ before relying on a new language feature.
 ## Docs
 
 - [Configuration](docs/CONFIGURATION.md): config file, environment variables, folders, models.
-- [Architecture](docs/ARCHITECTURE.md): the binary, PDF rendering, storage, the orb.
+- [Architecture](docs/ARCHITECTURE.md): the binary, PDF rendering, storage, turns and the HTTP API, voice, the prompt cache, the orb.
 - [Third-party components](THIRD_PARTY.md): vendored code, pinned checksums, update steps.
 
 ## License
