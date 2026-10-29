@@ -7,6 +7,7 @@ How the Ora binary is built and why each choice was made.
 - [Rendering runs in child processes](#rendering-runs-in-child-processes)
 - [SQLite through FFI](#sqlite-through-ffi)
 - [Turns](#turns)
+- [Tools](#tools)
 - [HTTP API](#http-api)
 - [Voice turns](#voice-turns)
 - [Spoken replies](#spoken-replies)
@@ -74,6 +75,41 @@ events and handles audio input and output.
 
 `POST /api/asr` transcribes one utterance.
 
+Source layout, by feature: `src/server/{engine,llm,chat,docs,store,tools}/` and `src/web/{chat,voice,orb}/`, with
+the entry points (`index.ts`, `config.ts`, `app.ts`, `state.ts`) at each root. Tests mirror it under `test/`.
+
+## Tools
+
+The model can call tools during a turn. `POST /api/turn` takes `tools`, a list of group names; the server
+intersects it with the config's `tools` ceiling, so the page cannot enable a group the config does not allow.
+Definitions are sent in the OpenAI `tools` format. A turn runs at most 8 rounds (completion, tool calls, results);
+the last round is sent without definitions so the model must answer. The final reply is stored as an `assistant`
+message, and the steps (name, summary, result, up to 1500 characters) as one `tool` message just before it, so a
+reloaded chat shows what ran. `tool` rows are never part of the prompt. The page switches `docs` and `utility` on by
+default (kept under `ora.tools` in the browser) and shows the active groups in a chip beside the composer. Calibration of the context estimate is skipped on turns that used tools.
+
+| Group | Tools | Asks first |
+|---|---|---|
+| `docs` | `search_documents`, `read_document` | no |
+| `utility` | `current_time`, `calculate` (a parser, never `eval`) | no |
+| `web` | `web_search`, `web_fetch` | no |
+| `system` | `run_command`, `read_file`, `write_file`, `list_dir` | every call |
+
+- **Defaults:** `docs` and `utility` are allowed by the config; `web` and `system` need to be listed in `tools`,
+  and the page's Tools settings start empty.
+- **Web:** `web_fetch` allows http(s) only, refuses credentials in the URL, `localhost`, `.local`/`.internal` and
+  private or loopback addresses (checked again on every redirect and after DNS resolution), follows at most 4
+  redirects, times out at 15 s and returns at most 20000 characters. `web_search` calls `searchUrl` with `{q}`
+  replaced; it fails with "not configured" when unset.
+- **System:** files are confined to `workDir` (symlinks are resolved first); writes are capped at 1 MB. Commands run
+  with `sh -c` in `workDir`, in their own process group, with a timeout and a 20000-character output cap.
+- **Approval:** an asking tool emits `approval` and waits. The decision arrives from the Allow/Deny buttons, a typed
+  word, or speech, through `POST /api/turn/approve`. Cancelling the turn denies it. The spoken answer is matched
+  strictly (`src/web/chat/approval.ts`): only short replies made of yes/no words count, anything else is asked
+  again, and speech does not interrupt the turn while a question is open.
+- **Events:** `tool {id,name,summary,say,ask}`, `approval {id,name,summary}`, `tool_done {id,ok,denied,output}`.
+  Tools that do not ask are announced by voice with `say`.
+
 ## HTTP API
 
 All routes are served on `127.0.0.1:<port>`. Errors are `{ "error": string }` with the status code. A request whose
@@ -86,6 +122,8 @@ All routes are served on `127.0.0.1:<port>`. Errors are `{ "error": string }` wi
 | `POST /api/start` | 64 KiB | Starts `llama-server` with `model`, `mmproj`, `ctx`, `reasoning`, `parallel` (default 2, range 1-8). 400 on a bad value. |
 | `POST /api/stop` | | Stops it. |
 | `POST /api/turn` | 48 MiB | Server-sent events, see [Turns](#turns). 400 on a bad body, 404 for an unknown chat. |
+| `GET /api/tools` | | Tool groups with their tools, whether the config allows each, `workDir` and whether a search URL is set. |
+| `POST /api/turn/approve` | 4 KiB | `{ id, decision: "allow" or "deny" }` answers a pending approval; returns `{ ok }` (false when none is waiting). |
 | `POST /api/asr` | 16 MiB | `{ audio }` (base64 WAV) returns `{ text }`. 400 without audio, 502 when the model call fails. |
 | `GET`, `PUT /api/persona` | 64 KiB | The orb's memory (`persona.json`). |
 | `GET`, `POST /api/chats` | 4 KiB | List chats; create one (`title` is cut to 120 characters). |
@@ -104,7 +142,7 @@ prompt `Perform ASR.` at temperature 0, shows the returned words in the user's b
 and stores them as text with a `voice` flag. Audio is never kept: later turns, reloads and document search all use
 the words, and a spoken sentence costs tens of tokens instead of thousands. The mic needs a model with audio input.
 
-`src/web/vad.ts` decides when an utterance starts and ends from the microphone level. The pause that ends a turn
+`src/web/voice/vad.ts` decides when an utterance starts and ends from the microphone level. The pause that ends a turn
 is a setting (default 0.9 s, 0.4 to 2.0 s). While the model is thinking or speaking, speech must be louder and
 last about 250 ms before it counts, which keeps the model's own voice from cutting itself off. When it does count,
 generation and speech stop and the new utterance is taken.
@@ -114,12 +152,19 @@ it has. Speech that resumes (`resume`) drops that transcription and recording co
 first, the words are usually ready. The microphone is read by an AudioWorklet (frames of 2048 samples at the
 device's rate, downsampled to 16 kHz for the model), with a ScriptProcessor fallback.
 
+The server caps a transcription at `6 x seconds + 24` tokens (32 to 400), so a clip of noise cannot turn into a long
+invented passage. The page then drops a transcript that is empty or a single word that is not a plain command
+(`src/web/voice/transcript.ts`: "One.", "on." are dropped, "Yes." and "Stop." are kept) and says it did not catch it.
+The metrics panel shows the last transcription time as `asr ms`.
+
 ## Spoken replies
 
 With "Speak replies" on, the text of a reply follows the voice instead of racing ahead of it. The reply streams in
-as usual, but the browser holds it back and shows only what has been spoken (`R.cap` in `src/web/app.ts` is the
+as usual, but the browser holds it back and shows only what has been spoken (`R.cap` in `src/web/voice/speech.ts` is the
 number of characters of the reply that are visible).
 
+- Playback speed is the "Speaking speed" setting (0.8x to 1.5x, default 1.2x). It is applied as the audio
+  source's `playbackRate`, so pitch rises a little with speed, and the text reveal is paced to the sped-up length.
 - The reply is split into sentences as it streams: a chunk ends at `.`, `!` or `?` followed by whitespace, or at a
   newline, and a chunk shorter than 24 characters is joined with the next one. Markdown marks and code blocks are
   removed before synthesis, so they are never spoken.
@@ -138,7 +183,7 @@ appears as it streams.
 ## Context and the prompt cache
 
 `llama-server` reuses the cached start of a slot's previous prompt, so the server builds each prompt to keep its
-start identical from turn to turn (`src/server/prompt.ts`). The order is: system prompt (plus whole documents when
+start identical from turn to turn (`src/server/chat/prompt.ts`). The order is: system prompt (plus whole documents when
 they fit), the PDF pages, the history, and last the question. Document excerpts chosen for this question are added
 to the last user message, so they never change what comes before it. Replies run on slot 0 and transcription on
 slot 1 (`id_slot`; the engine starts with two slots), so one does not evict the other's cache. The `done` event
@@ -166,21 +211,21 @@ layout: a floating chat panel, metrics at the right from 1100 px, and a centred 
 the phone layout. The Inter variable font is bundled, so the page makes no font requests.
 
 Replies are rendered as Markdown (paragraphs, headings, lists with nested items, quotes, code blocks, bold, italic,
-inline code). `src/web/markdown.ts` turns text into plain data and the page builds elements from it with `textContent`, so model
+inline code). `src/web/chat/markdown.ts` turns text into plain data and the page builds elements from it with `textContent`, so model
 output cannot inject HTML. An unfinished marker stays literal until it closes, which keeps streaming stable. While a
 reply streams, `MarkdownStream` keeps the blocks that can no longer change and parses only the tail, so finished
 paragraphs keep their elements and any text selected in them.
 
 ## The orb and the persona
 
-The orb is drawn by a WGSL shader (`src/web/orb.wgsl`) through vgpu: a glass sphere with eyes, and a shell of
+The orb is drawn by a WGSL shader (`src/web/orb/orb.wgsl`) through vgpu: a glass sphere with eyes, and a shell of
 dots on a latitude/longitude grid (200 latitude bands) that responds to load, context use and key-value cache use.
 The eyes are tinted with the orb's hue and sit on a soft dark shadow, so they stay readable on a bright body.
-Browsers without WebGPU get a 2D canvas version (`src/web/orb.ts`, "canvas 2d" in the metrics panel) with the same
+Browsers without WebGPU get a 2D canvas version (`src/web/orb/orb.ts`, "canvas 2d" in the metrics panel) with the same
 eyes: 600 particles about 0.3 to 0.9 px in radius, and a 1 px ring with a tick every 6 degrees (longer every 30)
 that shows context use as an arc and key-value cache use as dashes. The body is drawn with normal compositing,
 because adding light every frame on top of the trail fade saturates to a flat white disc.
-`src/web/persona.ts` holds the mood (valence, arousal, curiosity, strain), the current expression and a memory of
+`src/web/orb/persona.ts` holds the mood (valence, arousal, curiosity, strain), the current expression and a memory of
 past conversations. The browser saves it to the server (`/api/persona`), which stores `persona.json`.
 
 ## Invariants

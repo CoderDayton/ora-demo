@@ -1,6 +1,6 @@
-import { Orb } from './orb.ts';
-import type { ChatInfo, DocInfo, Part } from './state.ts';
-import { $, api, hooks, S, store } from './state.ts';
+import { Orb } from '../orb/orb.ts';
+import type { ChatInfo, DocInfo, Part } from '../state.ts';
+import { $, api, hooks, S, store } from '../state.ts';
 
 interface ChatData {
   chat: ChatInfo;

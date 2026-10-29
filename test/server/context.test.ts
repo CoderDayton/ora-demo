@@ -1,8 +1,8 @@
 import assert from 'node:assert';
 import { test } from 'node:test';
-import { buildContext } from '../src/server/context.ts';
-import { chunkText, joinChunks } from '../src/server/docs.ts';
-import { openStore } from '../src/server/store.ts';
+import { buildContext } from '../../src/server/chat/context.ts';
+import { chunkText, joinChunks } from '../../src/server/docs/docs.ts';
+import { openStore } from '../../src/server/store/store.ts';
 
 function same(actual: unknown, expected: unknown): void {
   assert.equal(JSON.stringify(actual), JSON.stringify(expected));

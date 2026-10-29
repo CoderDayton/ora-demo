@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { prepareModelsDir, scanModels } from '../src/server/engine.ts';
+import { prepareModelsDir, scanModels } from '../../src/server/engine/engine.ts';
 
 function same(actual: unknown, expected: unknown): void {
   assert.strictEqual(JSON.stringify(actual), JSON.stringify(expected));

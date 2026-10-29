@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import { test } from 'node:test';
-import { MarkdownStream, parseMarkdown } from '../src/web/markdown.ts';
+import { MarkdownStream, parseMarkdown } from '../../src/web/chat/markdown.ts';
 
 const t = (v: string) => ({ t: 'text', v });
 const li = (v: string) => ({ c: [t(v)] });

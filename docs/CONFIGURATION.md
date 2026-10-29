@@ -18,6 +18,9 @@ type, or a port outside range) falls back to the default.
 | `modelsDir` | `ORA_MODELS_DIR` | `models/` next to `config.json` |
 | `dataDir` | `ORA_DATA` | `~/.local/share/ora` |
 | `distDir` | `ORA_DIST` | unset: serve the embedded web app; set: serve the web files from this folder |
+| `tools` | `ORA_TOOLS` | `["docs", "utility"]`: tool groups the page may switch on (`docs`, `utility`, `web`, `system`). Env is comma-separated; `none` allows no group. |
+| `workDir` | `ORA_WORKDIR` | `<dataDir>/work`: the only folder the `system` tools can read, write or run commands in |
+| `searchUrl` | `ORA_SEARCH_URL` | unset: `web_search` is unavailable. A URL with `{q}`, e.g. a local SearXNG `http://127.0.0.1:8080/search?format=json&q={q}` |
 
 `ORA_CONFIG` points at a different config file. `XDG_CONFIG_HOME` and `XDG_DATA_HOME` move the config and data
 folders. Where `HOME` is unset (Windows), `USERPROFILE` stands in for it, so the paths keep the same layout.

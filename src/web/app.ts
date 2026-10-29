@@ -1,10 +1,37 @@
-import { adoptChat, newChat, pageRanges, refreshChats, renderDocs, restoreLastChat, uploadDocs } from './chats.ts';
-import type { Block, Inline, ListItem } from './markdown.ts';
-import { MarkdownStream } from './markdown.ts';
-import { Orb } from './orb.ts';
+import { adoptChat, newChat, pageRanges, refreshChats, renderDocs, restoreLastChat, uploadDocs } from './chat/chats.ts';
+import { addMsg, cancelMdSoon, mdSoon, note, renderLog } from './chat/render.ts';
+import type { ToolEvent } from './chat/tools.ts';
+import {
+  answerFromWords,
+  awaitingApproval,
+  enabledGroups,
+  initToolSettings,
+  toolApproval,
+  toolDone,
+  toolStart,
+  toolsBegin,
+  toolsBox,
+  toolsEnded,
+} from './chat/tools.ts';
+import { Orb } from './orb/orb.ts';
 import type { ChatInfo, Part, Props, Usage } from './state.ts';
 import { $, api, fmt, hooks, L, S, store } from './state.ts';
-import { Vad } from './vad.ts';
+import {
+  ac,
+  activeAnalyser,
+  paint,
+  reveal,
+  say,
+  showReply,
+  speaking,
+  speechEvents,
+  speechFeed,
+  speechIdle,
+  speechStop,
+  visibleCap,
+} from './voice/speech.ts';
+import { isNoise } from './voice/transcript.ts';
+import { Vad } from './voice/vad.ts';
 
 interface ModelRow {
   path: string;
@@ -26,7 +53,7 @@ interface Timings {
   prompt_n?: number;
 }
 // What /api/turn streams: the chat, the stored question, notes, reply deltas and a final summary.
-interface TurnEvent {
+interface TurnEvent extends ToolEvent {
   type: string;
   chat?: ChatInfo;
   text?: string;
@@ -50,6 +77,7 @@ const MROWS: [string, string][] = [
   ['cache', 'prompt cache'],
   ['tin', 'tokens in'],
   ['tout', 'tokens out'],
+  ['asr', 'asr ms'],
   ['tts', 'tts ms'],
   ['gfx', 'renderer'],
 ];
@@ -226,7 +254,7 @@ $('#start').onclick = async () => {
   }
 };
 $('#stop').onclick = async () => {
-  ttsStop();
+  speechStop();
   S.abort?.abort();
   await api('/api/stop', {});
   void pollEngine();
@@ -234,260 +262,13 @@ $('#stop').onclick = async () => {
 $('#logbtn').onclick = () => $('#logs').classList.toggle('show');
 
 /* ---------- transcript ---------- */
-const logEl = $('#log');
-const scrollEnd = (): void => {
-  logEl.scrollTop = logEl.scrollHeight;
-};
-// Replies are shown as Markdown. The parser returns data and elements are built with textContent, so model
-// output can never inject markup.
-const inlineNodes = (parts: Inline[]): Node[] =>
-  parts.map(p => {
-    if (p.t === 'text') return document.createTextNode(p.v);
-    const e = document.createElement(p.t === 'code' ? 'code' : p.t === 'strong' ? 'strong' : 'em');
-    e.textContent = p.v;
-    return e;
-  });
-function itemEl(it: ListItem): HTMLElement {
-  const li = document.createElement('li');
-  li.append(...inlineNodes(it.c));
-  if (it.sub) li.append(...it.sub.map(blockEl));
-  return li;
-}
-function blockEl(b: Block): HTMLElement {
-  if (b.t === 'code') {
-    const pre = document.createElement('pre');
-    const code = document.createElement('code');
-    code.textContent = b.v;
-    pre.appendChild(code);
-    return pre;
-  }
-  if (b.t === 'ul' || b.t === 'ol') {
-    const list = document.createElement(b.t);
-    for (const it of b.items) list.appendChild(itemEl(it));
-    if (b.t === 'ol' && b.start !== 1) (list as HTMLOListElement).start = b.start;
-    return list;
-  }
-  const e = document.createElement(b.t === 'h' ? `h${b.n}` : b.t === 'quote' ? 'blockquote' : 'p');
-  e.append(...inlineNodes(b.c));
-  return e;
-}
-// Each message keeps its own stream parser, so a growing reply rebuilds only the blocks that can still change and
-// the finished ones keep their nodes (and any text selection in them).
-const streams = new WeakMap<HTMLElement, MarkdownStream>();
-const rendered = new WeakMap<HTMLElement, number>();
-function mdInto(el: HTMLElement, text: string): void {
-  el.classList.add('md');
-  let stream = streams.get(el);
-  if (!stream) {
-    stream = new MarkdownStream();
-    streams.set(el, stream);
-  }
-  const { blocks, changedFrom } = stream.update(text);
-  const keep = el.childNodes.length === (rendered.get(el) ?? 0) ? Math.min(changedFrom, el.childNodes.length) : 0;
-  if (!keep) el.replaceChildren();
-  rendered.set(el, blocks.length);
-  while (el.childNodes.length > keep) (el.lastChild as ChildNode).remove();
-  el.append(...blocks.slice(keep).map(blockEl));
-}
-// While a reply streams it is re-rendered at most every 120 ms, and the view follows it only if the reader is at the bottom.
-let mdTimer = 0;
-const nearBottom = (): boolean => logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 80;
-function mdSoon(el: HTMLElement, getText: () => string): void {
-  if (mdTimer) return;
-  mdTimer = window.setTimeout(() => {
-    mdTimer = 0;
-    const follow = nearBottom();
-    mdInto(el, getText());
-    if (follow) scrollEnd();
-  }, 120);
-}
-
-function addMsg(role: string, text: string, cls = ''): HTMLElement {
-  const d = document.createElement('div');
-  d.className = `msg ${role} ${cls}`.trim();
-  if (role === 'assistant' && text) mdInto(d, text);
-  else d.textContent = text;
-  logEl.appendChild(d);
-  scrollEnd();
-  return d;
-}
-function note(text: string, isErr = false): void {
-  addMsg('note', text, isErr ? 'err' : '');
-  if (isErr) Orb.error();
-}
-function renderLog(): void {
-  document.body.classList.toggle('chatting', S.hist.length > 0);
-  logEl.innerHTML = '';
-  for (const m of S.hist) {
-    const d = addMsg(m.role, typeof m.content === 'string' ? m.content : '');
-    if (typeof m.content === 'string') continue;
-    for (const p of m.content) {
-      if (p.type === 'image_url') {
-        const im = new Image();
-        im.src = p.image_url.url;
-        d.prepend(im);
-      } else if (p.type === 'input_audio') d.appendChild(document.createTextNode('(voice message) '));
-      else {
-        d.appendChild(document.createTextNode(p.text));
-        if (p.voice) d.classList.add('voice');
-      }
-    }
-  }
-}
 const statusline = (t: string): void => {
   $('#statusline').textContent = t;
 };
 
 let transcribing = false;
 
-/* ---------- audio out (tts) ---------- */
-let _ac: AudioContext | null = null;
-let _outAn: AnalyserNode | null = null;
-function ac(): AudioContext {
-  if (!_ac) _ac = new AudioContext();
-  if (_ac.state === 'suspended') void _ac.resume();
-  return _ac;
-}
-function outAnalyser(): AnalyserNode {
-  if (!_outAn) {
-    _outAn = ac().createAnalyser();
-    _outAn.fftSize = 1024;
-    _outAn.connect(ac().destination);
-  }
-  return _outAn;
-}
-// `end` is where a sentence ends in the raw reply text; `off` counts the raw text handed to the voice so far.
-const T = {
-  q: [] as { p: Promise<AudioBuffer | null>; id: number; end: number }[],
-  playing: false,
-  buf: '',
-  off: 0,
-  id: 0,
-  src: null as AudioBufferSourceNode | null,
-};
-// With speech on, the reply shows only what the voice has reached: `cap` is that point in the reply text.
-const R = { el: null as HTMLElement | null, text: (): string => '', cap: Infinity, raf: 0 };
-function paint(): void {
-  if (!R.el) return;
-  const follow = nearBottom();
-  mdInto(R.el, R.text().slice(0, R.cap));
-  if (follow) scrollEnd();
-}
-function reveal(to: number): void {
-  cancelAnimationFrame(R.raf);
-  R.cap = to;
-  paint();
-}
-// Uncovers the text from..to evenly over the sentence's audio, a whole word at a time.
-function glide(from: number, to: number, secs: number): void {
-  const t0 = performance.now();
-  cancelAnimationFrame(R.raf);
-  const step = (): void => {
-    const f = Math.min(1, (performance.now() - t0) / 1000 / Math.max(secs, 0.05));
-    let at = Math.floor(from + (to - from) * f);
-    if (f < 1) {
-      const sp = R.text().indexOf(' ', at);
-      at = sp < 0 || sp > to ? to : sp;
-    }
-    if (at !== R.cap) {
-      R.cap = at;
-      paint();
-    }
-    if (f < 1) R.raf = requestAnimationFrame(step);
-  };
-  step();
-}
-const SENT = /[.!?]+["')\]]*\s|\n/;
-const speechClean = (s: string): string =>
-  s
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/[*_#`>~|]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-function ttsFeed(d: string, final = false): void {
-  if (!S.set.speak) return;
-  T.buf += d;
-  for (;;) {
-    const m = T.buf.match(SENT);
-    if (!m && !(final && T.buf.trim())) break;
-    let end = m ? (m.index as number) + m[0].length : T.buf.length;
-    if (m && end < 24 && !final) {
-      const m2 = T.buf.slice(end).match(SENT);
-      if (!m2) break;
-      end += (m2.index as number) + m2[0].length;
-    }
-    const chunk = speechClean(T.buf.slice(0, end));
-    T.buf = T.buf.slice(end);
-    T.off += end;
-    if (/[\p{L}\p{N}]/u.test(chunk)) ttsEnqueue(chunk, T.off);
-    if (!T.buf) break;
-  }
-}
-function ttsEnqueue(text: string, end: number): void {
-  const id = T.id,
-    t0 = performance.now();
-  const p = fetch(`${L}/tts`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ input: text, voice: S.set.voice }),
-  })
-    .then(async r => {
-      if (!r.ok) throw new Error(`tts ${r.status}`);
-      const buf = await ac().decodeAudioData(await r.arrayBuffer());
-      setM('tts', fmt(performance.now() - t0));
-      return buf;
-    })
-    .catch((e: unknown) => {
-      console.warn(e);
-      return null;
-    });
-  T.q.push({ p, id, end });
-  Orb.ripple(0.4, 38);
-  if (!T.playing) void ttsPlay();
-}
-async function ttsPlay(): Promise<void> {
-  T.playing = true;
-  while (T.q.length) {
-    const it = T.q.shift() as (typeof T.q)[number];
-    const buf = await it.p;
-    if (it.id !== T.id) continue;
-    if (!buf) {
-      reveal(it.end);
-      continue;
-    }
-    Orb.setMode('speaking');
-    await new Promise<void>(res => {
-      const s = ac().createBufferSource();
-      s.buffer = buf;
-      s.connect(outAnalyser());
-      T.src = s;
-      s.onended = () => res();
-      s.start();
-      glide(R.cap, it.end, buf.duration);
-    });
-    T.src = null;
-    if (it.id === T.id) reveal(it.end);
-  }
-  T.playing = false;
-  if (!S.busy) {
-    reveal(Infinity);
-    afterTurn();
-  }
-}
-function ttsStop(): void {
-  T.id++;
-  T.q = [];
-  T.buf = '';
-  T.off = 0;
-  reveal(Infinity);
-  try {
-    T.src?.stop();
-  } catch {
-    /* already stopped */
-  }
-  T.src = null;
-}
+speechEvents.synth = ms => setM('tts', fmt(ms));
 
 /* ---------- chat ---------- */
 // A voice turn is stored as its transcript (flagged so the UI can show it was spoken), never as audio:
@@ -506,6 +287,7 @@ interface Asr {
 }
 function asr(wav: string): Asr {
   const ctl = new AbortController();
+  const t0 = performance.now();
   const p = fetch('/api/asr', {
     method: 'POST',
     signal: ctl.signal,
@@ -514,6 +296,7 @@ function asr(wav: string): Asr {
   }).then(async r => {
     const j = (await r.json().catch(() => ({}))) as { text?: string; error?: string };
     if (!r.ok) throw new Error(`transcription failed: ${j.error ?? r.status}`);
+    setM('asr', fmt(performance.now() - t0));
     return (j.text ?? '').trim();
   });
   // A speculative transcription may be dropped unread; its failure is reported only if it is awaited.
@@ -600,11 +383,15 @@ async function heard(a: Asr): Promise<string> {
   pending.remove();
   transcribing = false;
   S.busy = false;
+  if (isNoise(text)) {
+    if (text) note(`didn't catch that: "${text}"`);
+    return '';
+  }
   return text;
 }
 
 async function turn(text: string, opts: { audio?: Asr }): Promise<void> {
-  ttsStop();
+  speechStop();
   const voice = !!opts.audio;
   if (opts.audio) {
     text = await heard(opts.audio);
@@ -616,6 +403,9 @@ async function turn(text: string, opts: { audio?: Asr }): Promise<void> {
   const imgs = S.pending;
   S.pending = [];
   renderPending();
+  // Whatever was typed but not sent is dropped, so a spoken turn does not leave a stale draft behind.
+  inp.value = '';
+  inp.style.height = 'auto';
   S.hist.push({ role: 'user', content: userContent(text || 'Describe this image.', imgs, voice) });
   renderLog();
   Orb.state.typing = false;
@@ -635,9 +425,8 @@ async function turn(text: string, opts: { audio?: Asr }): Promise<void> {
     acc = '',
     failed = '';
   let timings: Timings | null = null;
-  R.el = bubble;
-  R.text = () => acc;
-  R.cap = S.set.speak ? 0 : Infinity;
+  showReply(bubble, () => acc);
+  toolsBegin(bubble);
   const onDelta = (e: TurnEvent): void => {
     const now = performance.now();
     if ((e.content || e.reasoning) && !tFirst) {
@@ -659,9 +448,9 @@ async function turn(text: string, opts: { audio?: Asr }): Promise<void> {
       Orb.state.thinking = false;
       acc += e.content;
       n++;
-      mdSoon(bubble, () => acc.slice(0, R.cap));
+      mdSoon(bubble, () => acc.slice(0, visibleCap()));
       Orb.pulse(0.3);
-      ttsFeed(e.content);
+      speechFeed(e.content);
     }
     if (tFirst) {
       const rate = n / ((now - tFirst) / 1000 + 0.05);
@@ -676,6 +465,13 @@ async function turn(text: string, opts: { audio?: Asr }): Promise<void> {
       adoptChat(e.chat.id);
       void refreshChats();
     } else if (e.type === 'note') note(e.text ?? '');
+    else if (e.type === 'tool') {
+      toolStart(e);
+      statusline(e.summary ?? 'calling a tool...');
+    } else if (e.type === 'approval') {
+      toolApproval(e);
+      statusline('waiting for your answer: allow or deny');
+    } else if (e.type === 'tool_done') toolDone(e);
     else if (e.type === 'done') {
       S.usage = e.usage ?? null;
       timings = e.timings ?? null;
@@ -698,6 +494,7 @@ async function turn(text: string, opts: { audio?: Asr }): Promise<void> {
         temperature: S.set.temp,
         maxTokens: S.set.maxtok,
         ranges: pageRanges(),
+        tools: enabledGroups(),
       }),
     });
     if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? res.statusText);
@@ -714,9 +511,9 @@ async function turn(text: string, opts: { audio?: Asr }): Promise<void> {
       }
     }
   } finally {
+    toolsEnded();
     if (acc) {
-      clearTimeout(mdTimer);
-      mdTimer = 0;
+      cancelMdSoon();
       paint();
       S.hist.push({ role: 'assistant', content: acc });
     } else if (!bubble.classList.contains('err')) bubble.remove();
@@ -738,14 +535,14 @@ async function turn(text: string, opts: { audio?: Asr }): Promise<void> {
     }
     savePersona();
     showCtx();
-    ttsFeed('', true);
+    speechFeed('', true);
     S.busy = false;
     S.abort = null;
     Orb.state.rate = 0;
     $('#send').classList.remove('stop');
     statusline('');
     void refreshChats().catch(() => undefined);
-    if (!T.playing && !T.q.length) {
+    if (speechIdle()) {
       reveal(Infinity);
       afterTurn();
     }
@@ -812,10 +609,11 @@ function afterTurn(): void {
   Orb.setMode(S.handsfree ? 'listening' : S.engine === 'ready' ? 'idle' : 'off');
   statusline(S.handsfree ? 'listening...' : '');
 }
+speechEvents.idle = afterTurn;
 // Speaking while the orb is thinking or talking stops it and takes the new utterance.
 function interrupt(): void {
   S.abort?.abort();
-  ttsStop();
+  speechStop();
 }
 function dropSpec(): void {
   M.spec?.ctl.abort();
@@ -837,9 +635,11 @@ function onFrame(x: Float32Array): void {
     M.pre.push(x);
     if (M.pre.length > 8) M.pre.shift();
   }
-  const ev = vad.push(rms, performance.now(), T.playing || S.busy);
+  const ev = vad.push(rms, performance.now(), speaking() || (S.busy && !awaitingApproval()));
   if (ev === 'start' || ev === 'barge') {
-    if (S.busy || T.playing) interrupt();
+    // While a tool waits for allow or deny the user can answer over the question; the turn keeps waiting.
+    if (awaitingApproval()) speechStop();
+    else if (S.busy || speaking()) interrupt();
     dropSpec();
     M.buf = [...M.pre];
     Orb.setMode('listening');
@@ -871,8 +671,21 @@ function finishUtterance(): void {
   M.spec = null;
   M.buf = [];
   M.pre = [];
-  if (a) void send('', { audio: a });
-  else afterTurn();
+  if (!a) afterTurn();
+  else if (awaitingApproval()) void answerByVoice(a);
+  else void send('', { audio: a });
+}
+// The utterance answers a tool's allow/deny question instead of starting a turn. Anything unclear is asked again.
+async function answerByVoice(a: Asr): Promise<void> {
+  let words = '';
+  try {
+    words = await a.p;
+  } catch (e) {
+    if (!isAbort(e)) note(errText(e), true);
+  }
+  if (!awaitingApproval()) return;
+  if (answerFromWords(words)) note(`heard: "${words.trim()}"`);
+  else say('Please say allow or deny.');
 }
 
 // Microphone samples are collected off the main thread and posted in frames of this size, which the VAD was tuned for.
@@ -927,7 +740,7 @@ async function micOn(): Promise<void> {
     M.tap.connect(c.destination);
     S.handsfree = true;
     $('#mic').classList.add('live');
-    if (!S.busy && !T.playing) afterTurn();
+    if (!S.busy && !speaking()) afterTurn();
   } catch (e) {
     note(`mic unavailable: ${errText(e)}`, true);
   }
@@ -949,7 +762,7 @@ function micOff(): void {
   S.handsfree = false;
   $('#mic').classList.remove('live');
   Orb.state.mic = 0;
-  if (!S.busy && !T.playing) afterTurn();
+  if (!S.busy && !speaking()) afterTurn();
 }
 $('#mic').onclick = () => {
   if (S.handsfree) micOff();
@@ -958,8 +771,8 @@ $('#mic').onclick = () => {
 
 const lvBuf = new Uint8Array(1024);
 (function outLevel(): void {
-  const an = _outAn as AnalyserNode | null;
-  if (an && T.playing) {
+  const an = activeAnalyser();
+  if (an && speaking()) {
     an.getByteTimeDomainData(lvBuf);
     let s = 0;
     for (const v of lvBuf) {
@@ -1039,9 +852,16 @@ addEventListener('drop', e => {
 /* ---------- composer + settings ---------- */
 const inp = $<HTMLTextAreaElement>('#input');
 function submit(): void {
+  if (awaitingApproval() && inp.value.trim()) {
+    const t = inp.value;
+    inp.value = '';
+    inp.style.height = 'auto';
+    if (!answerFromWords(t)) note('Answer allow or deny, or use the buttons.');
+    return;
+  }
   if (S.busy) {
     S.abort?.abort();
-    ttsStop();
+    speechStop();
     return;
   }
   const t = inp.value;
@@ -1070,6 +890,7 @@ inp.addEventListener('input', () => {
 });
 const opts = $('#opts');
 $('#cog').onclick = () => opts.classList.toggle('show');
+$('#toolchip').onclick = () => opts.classList.add('show');
 $('#optsclose').onclick = () => opts.classList.remove('show');
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') opts.classList.remove('show');
@@ -1087,11 +908,14 @@ function bindText(id: string, key: 'sys' | 'voice'): void {
     store.set('ora.set', S.set);
   };
 }
-function bindNum(id: string, key: 'temp' | 'maxtok' | 'pagepx' | 'pause'): void {
+function bindNum(id: string, key: 'temp' | 'maxtok' | 'pagepx' | 'pause' | 'rate'): void {
   const el = $<HTMLInputElement>(id);
   const out = document.getElementById(`${id.slice(1)}-v`);
   const show = (): void => {
-    if (out) out.textContent = key === 'pause' ? `${(Number(el.value) / 1000).toFixed(1)} s` : Number(el.value).toFixed(1);
+    if (!out) return;
+    if (key === 'pause') out.textContent = `${(Number(el.value) / 1000).toFixed(1)} s`;
+    else if (key === 'rate') out.textContent = `${Number(el.value).toFixed(2)}x`;
+    else out.textContent = Number(el.value).toFixed(1);
   };
   el.value = String(S.set[key]);
   show();
@@ -1111,7 +935,9 @@ bindText('#voice', 'voice');
 bindNum('#temp', 'temp');
 bindNum('#maxtok', 'maxtok');
 bindNum('#pagepx', 'pagepx');
+void initToolSettings(toolsBox());
 bindNum('#pause', 'pause');
+bindNum('#rate', 'rate');
 
 for (const c of document.querySelectorAll<HTMLButtonElement>('#cards button')) {
   c.onclick = () => {
@@ -1154,7 +980,7 @@ speak.checked = S.set.speak;
 speak.onchange = () => {
   S.set.speak = speak.checked;
   store.set('ora.set', S.set);
-  if (!S.set.speak) ttsStop();
+  if (!S.set.speak) speechStop();
 };
 $('#newchat').onclick = () => {
   void newChat();
@@ -1169,10 +995,10 @@ hooks.renderLog = renderLog;
 hooks.showCtx = showCtx;
 hooks.note = note;
 hooks.statusline = statusline;
-hooks.stopSpeech = ttsStop;
+hooks.stopSpeech = speechStop;
 hooks.abortChat = async () => {
   S.abort?.abort();
-  ttsStop();
+  speechStop();
   await inflight;
 };
 

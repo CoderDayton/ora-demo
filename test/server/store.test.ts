@@ -3,8 +3,8 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { Sql } from '../src/server/sqlite.ts';
-import { openStore } from '../src/server/store.ts';
+import { Sql } from '../../src/server/store/sqlite.ts';
+import { openStore } from '../../src/server/store/store.ts';
 
 // JSON comparison keeps every operand the same static type, which scriptc's assert lowering requires.
 function same(actual: unknown, expected: unknown): void {

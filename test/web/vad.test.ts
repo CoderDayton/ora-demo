@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import { test } from 'node:test';
-import { Vad } from '../src/web/vad.ts';
+import { Vad } from '../../src/web/voice/vad.ts';
 
 const FRAME = 43;
 function feed(v: Vad, level: number, ms: number, t: { now: number }, playing = false): string[] {

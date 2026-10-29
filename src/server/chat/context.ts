@@ -1,5 +1,5 @@
-import { joinChunks } from './docs.ts';
-import type { Hit, Store } from './store.ts';
+import { joinChunks } from '../docs/docs.ts';
+import type { Hit, Store } from '../store/store.ts';
 
 export interface DocContext {
   mode: 'full' | 'excerpts';

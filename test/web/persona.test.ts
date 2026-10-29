@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { Look, Senses } from '../src/web/persona.ts';
-import { Persona } from '../src/web/persona.ts';
+import type { Look, Senses } from '../../src/web/orb/persona.ts';
+import { Persona } from '../../src/web/orb/persona.ts';
 
 const calm: Senses = { mode: 'idle', mic: 0, out: 0, rate: 0, ctx: 0, kv: 0, thinking: false, tool: false, typing: false, pointer: null };
 

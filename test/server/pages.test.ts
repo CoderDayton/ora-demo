@@ -3,9 +3,9 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { ingestPdf, PageRenderer } from '../src/server/pages.ts';
-import { renderWorker } from '../src/server/pdfium.ts';
-import { openStore } from '../src/server/store.ts';
+import { ingestPdf, PageRenderer } from '../../src/server/docs/pages.ts';
+import { renderWorker } from '../../src/server/docs/pdfium.ts';
+import { openStore } from '../../src/server/store/store.ts';
 
 // Like the server binary, this test binary renders pages when started as a worker, so the child path runs for real.
 if (process.argv[2] === '--render-pdf') process.exit(renderWorker(process.argv.slice(3)));

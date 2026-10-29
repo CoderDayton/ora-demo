@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { joinChunks } from './docs.ts';
+import { joinChunks } from '../docs/docs.ts';
 import type { Val } from './sqlite.ts';
 import { Sql } from './sqlite.ts';
 

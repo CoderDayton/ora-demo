@@ -3,8 +3,8 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { chunkText, extractDoc, isPdf } from '../src/server/docs.ts';
-import { pageTexts, renderPages, renderRaw, renderWorker } from '../src/server/pdfium.ts';
+import { chunkText, extractDoc, isPdf } from '../../src/server/docs/docs.ts';
+import { pageTexts, renderPages, renderRaw, renderWorker } from '../../src/server/docs/pdfium.ts';
 
 function same(actual: unknown, expected: unknown): void {
   assert.equal(JSON.stringify(actual), JSON.stringify(expected));

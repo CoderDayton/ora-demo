@@ -1,7 +1,7 @@
 import assert from 'node:assert';
 import { test } from 'node:test';
-import type { Msg } from '../src/server/prompt.ts';
-import { calibrate, fitHistory, toApi } from '../src/server/prompt.ts';
+import type { Msg } from '../../src/server/chat/prompt.ts';
+import { calibrate, fitHistory, toApi } from '../../src/server/chat/prompt.ts';
 
 const cost = { charsPerToken: 4, imageTokens: 100, scale: 1 };
 const img = { type: 'image_url' as const, image_url: { url: 'data:image/jpeg;base64,xx' } };

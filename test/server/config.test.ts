@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import { test } from 'node:test';
-import { configPath, loadConfig } from '../src/server/config.ts';
+import { configPath, loadConfig } from '../../src/server/config.ts';
 
 function same(actual: unknown, expected: unknown): void {
   assert.strictEqual(JSON.stringify(actual), JSON.stringify(expected));
@@ -17,7 +17,23 @@ test('defaults hard-code nothing personal', () => {
     modelsDir: '/h/.config/ora/models',
     dataDir: '/h/.local/share/ora',
     distDir: null,
+    tools: ['docs', 'utility'],
+    workDir: '/h/.local/share/ora/work',
+    searchUrl: '',
   });
+});
+
+test('tools: the file and ORA_TOOLS choose the groups the page may switch on; unknown names are dropped', () => {
+  same(loadConfig(HOME, JSON.stringify({ tools: ['docs', 'web', 'system'] })).tools, ['docs', 'web', 'system']);
+  same(loadConfig({ HOME: '/h', ORA_TOOLS: 'utility, web' }, JSON.stringify({ tools: ['docs'] })).tools, ['utility', 'web']);
+  same(loadConfig(HOME, JSON.stringify({ tools: ['docs', 'root', 5] })).tools, ['docs']);
+  same(loadConfig({ HOME: '/h', ORA_TOOLS: 'none' }, null).tools, []);
+});
+
+test('workDir follows dataDir; workDir and searchUrl can be set', () => {
+  same(loadConfig({ HOME: '/h', ORA_DATA: '/d' }, null).workDir, '/d/work');
+  const c = loadConfig({ HOME: '/h', ORA_WORKDIR: '/w', ORA_SEARCH_URL: 'http://127.0.0.1:8080/search?format=json&q={q}' }, null);
+  same([c.workDir, c.searchUrl], ['/w', 'http://127.0.0.1:8080/search?format=json&q={q}']);
 });
 
 test('XDG_DATA_HOME moves the data directory', () => {

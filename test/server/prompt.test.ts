@@ -1,7 +1,7 @@
 import assert from 'node:assert';
 import { test } from 'node:test';
-import type { Msg, PageRef } from '../src/server/prompt.ts';
-import { assemble, estTokens, fitHistory, selectPages } from '../src/server/prompt.ts';
+import type { Msg, PageRef } from '../../src/server/chat/prompt.ts';
+import { assemble, estTokens, fitHistory, selectPages } from '../../src/server/chat/prompt.ts';
 
 const cost = { charsPerToken: 4, imageTokens: 100, scale: 1 };
 const user = (t: string): Msg => ({ role: 'user', content: t });

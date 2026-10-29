@@ -24,7 +24,8 @@ export type Part =
   | { type: 'image_url'; image_url: { url: string } }
   | { type: 'input_audio'; input_audio: { data: string; format: string } };
 export interface Msg {
-  role: 'user' | 'assistant' | 'system';
+  // 'tool' rows hold the steps of a turn (a list of saved tool calls), not message parts.
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string | Part[];
 }
 
@@ -52,6 +53,10 @@ export interface Settings {
   maxtok: number;
   pagepx: number;
   pause: number;
+  // Playback speed of spoken replies, 1 = as synthesized.
+  rate: number;
+  // Tool groups switched on for turns; the server's config limits which can be.
+  tools: string[];
 }
 export interface Props {
   modalities?: { vision?: boolean; audio?: boolean; video?: boolean };
@@ -89,7 +94,10 @@ export const S = {
     maxtok: 1024,
     pagepx: 1024,
     pause: 900,
+    rate: 1.2,
     ...store.get<Partial<Settings>>('ora.set', {}),
+    // Kept apart from the other settings so the switch-on default reaches pages that saved settings before tools existed.
+    tools: store.get<string[]>('ora.tools', ['docs', 'utility']),
   } as Settings,
 };
 

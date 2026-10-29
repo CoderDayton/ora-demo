@@ -2,7 +2,7 @@ import assert from 'node:assert';
 import type { Server } from 'node:http';
 import { createServer, request } from 'node:http';
 import { test } from 'node:test';
-import { proxy } from '../src/server/proxy.ts';
+import { proxy } from '../../src/server/llm/proxy.ts';
 
 function listen(s: Server, port: number): Promise<number> {
   return new Promise(ok => s.listen(port, '127.0.0.1', () => ok(port)));

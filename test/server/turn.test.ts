@@ -2,11 +2,11 @@ import assert from 'node:assert';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { createServer } from 'node:http';
 import { test } from 'node:test';
-import { ingestPdf, PageRenderer } from '../src/server/pages.ts';
-import type { Store } from '../src/server/store.ts';
-import { openStore } from '../src/server/store.ts';
-import type { TurnRequest } from '../src/server/turn.ts';
-import { Cancel, parseTurn, Turns, transcribe } from '../src/server/turn.ts';
+import type { TurnRequest } from '../../src/server/chat/turn.ts';
+import { Cancel, parseTurn, Turns, transcribe } from '../../src/server/chat/turn.ts';
+import { ingestPdf, PageRenderer } from '../../src/server/docs/pages.ts';
+import type { Store } from '../../src/server/store/store.ts';
+import { openStore } from '../../src/server/store/store.ts';
 
 function same(actual: unknown, expected: unknown): void {
   assert.equal(JSON.stringify(actual), JSON.stringify(expected));
@@ -96,7 +96,8 @@ type Ev = Record<string, unknown>;
 
 function setup(port: number, store: Store, slots = 2): { turns: Turns; renderer: PageRenderer } {
   const renderer = new PageRenderer(store, null);
-  return { turns: new Turns({ store, pages: renderer, llamaPort: port, slots: () => slots }), renderer };
+  const tools = { allowed: [], workDir: '', searchUrl: '' };
+  return { turns: new Turns({ store, pages: renderer, llamaPort: port, slots: () => slots, tools }), renderer };
 }
 
 function ask(text: string, chatId: number | null, extra: Record<string, unknown> = {}): TurnRequest {
@@ -267,6 +268,16 @@ test('transcribe sends the audio on its own slot and returns the trimmed words',
     same(bodyOf(llama, 0).temperature, 0);
     await transcribe(18948, 1, 'UklGRg==', new Cancel());
     same(bodyOf(llama, 1).id_slot, 0);
+  }));
+
+test('transcribe limits the words to what the clip length can hold, so noise cannot run on', () =>
+  withLlama(18949, async (llama: Fake) => {
+    await transcribe(18949, 2, 'UklGRg==', new Cancel());
+    same(bodyOf(llama, 0).max_tokens, 32);
+    await transcribe(18949, 2, 'A'.repeat(427000), new Cancel());
+    same(bodyOf(llama, 1).max_tokens, 85);
+    await transcribe(18949, 2, 'A'.repeat(8000000), new Cancel());
+    same(bodyOf(llama, 2).max_tokens, 400);
   }));
 
 test('parseTurn refuses a turn with nothing to say and bounds the settings', () => {

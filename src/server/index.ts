@@ -5,15 +5,16 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer } from 'node:http';
 import { extname, join, resolve, sep } from 'node:path';
 import { ASSETS } from './assets.gen.ts';
+import { buildContext } from './chat/context.ts';
+import { Cancel, parseTurn, Turns, transcribe } from './chat/turn.ts';
 import { configPath, loadConfig } from './config.ts';
-import { buildContext } from './context.ts';
-import { chunkText, extractDoc, isPdf } from './docs.ts';
-import { Engine, prepareModelsDir, scanModels } from './engine.ts';
-import { ingestPdf, PageRenderer } from './pages.ts';
-import { renderWorker } from './pdfium.ts';
-import { proxy } from './proxy.ts';
-import { openStore } from './store.ts';
-import { Cancel, parseTurn, Turns, transcribe } from './turn.ts';
+import { chunkText, extractDoc, isPdf } from './docs/docs.ts';
+import { ingestPdf, PageRenderer } from './docs/pages.ts';
+import { renderWorker } from './docs/pdfium.ts';
+import { Engine, prepareModelsDir, scanModels } from './engine/engine.ts';
+import { proxy } from './llm/proxy.ts';
+import { openStore } from './store/store.ts';
+import { GROUPS, TOOLS } from './tools/catalog.ts';
 
 // Child mode: PDFium parses untrusted files, so uploads are rendered by this same binary in a separate process.
 if (process.argv[2] === '--render-pdf') process.exit(renderWorker(process.argv.slice(3)));
@@ -48,7 +49,13 @@ prepareModelsDir(MODELS_DIR);
 const store = openStore(DATA);
 const pages = new PageRenderer(store, process.execPath);
 const engine = new Engine(LLAMA_BIN, LLAMA_PORT, MODELS_DIR, config.llamaArgs);
-const turns = new Turns({ store, pages, llamaPort: LLAMA_PORT, slots: () => engine.slots() });
+const turns = new Turns({
+  store,
+  pages,
+  llamaPort: LLAMA_PORT,
+  slots: () => engine.slots(),
+  tools: { allowed: config.tools, workDir: config.workDir, searchUrl: config.searchUrl },
+});
 
 // Cancelled when the browser goes away before the response is finished, which stops the model's work too.
 function cancelOnClose(res: ServerResponse): Cancel {
@@ -281,6 +288,19 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     );
     res.end();
     return;
+  }
+  if (p === '/api/tools' && method === 'GET') {
+    const groups = GROUPS.map((g: string) => ({
+      group: g,
+      allowed: config.tools.includes(g),
+      tools: TOOLS.filter(t => t.group === g).map(t => ({ name: t.name, description: t.description, ask: t.ask })),
+    }));
+    return send(res, 200, { groups, workDir: config.workDir, searchConfigured: config.searchUrl !== '' });
+  }
+  if (p === '/api/turn/approve' && method === 'POST') {
+    const b = await readJson(req, 4096);
+    if (typeof b.id !== 'string' || (b.decision !== 'allow' && b.decision !== 'deny')) throw new HttpError(400, 'id and decision required');
+    return send(res, 200, { ok: turns.approvals.resolve(b.id, b.decision) });
   }
   if (p === '/api/asr' && method === 'POST') {
     const b = await readJson(req, MAX_AUDIO);

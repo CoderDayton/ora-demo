@@ -67,6 +67,7 @@
         <h4>Voice</h4>
         <label>Speak replies <input type="checkbox" id="speak" checked></label>
         <label>Voice <select id="voice"><option>female</option><option>male</option></select></label>
+        <label>Speaking speed <span class="range"><input type="range" id="rate" min="0.8" max="1.5" step="0.05"><output id="rate-v"></output></span></label>
         <label>Wait after you stop <span class="range"><input type="range" id="pause" min="400" max="2000" step="100"><output id="pause-v"></output></span></label>
       </section>
       <section>
@@ -74,6 +75,10 @@
         <label>Temperature <span class="range"><input type="range" id="temp" min="0" max="2" step="0.1"><output id="temp-v"></output></span></label>
         <label>Max tokens <input type="number" id="maxtok" min="32" max="8192" step="32" value="1024"></label>
         <textarea id="sys" placeholder="System prompt"></textarea>
+      </section>
+      <section>
+        <h4>Tools</h4>
+        <div id="toolgroups"></div>
       </section>
       <section>
         <h4>Documents</h4>
@@ -89,6 +94,7 @@
         <button type="button" class="tool" id="attach" title="attach image"><svg aria-hidden="true" class="i" viewBox="0 0 24 24"><rect x="4" y="4.5" width="16" height="15" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="M5 17l4.5-4.5 3.5 3.5 2-2L19 17"/></svg></button>
         <button type="button" class="tool" id="docbtn" title="upload a PDF or text document to this chat"><svg aria-hidden="true" class="i" viewBox="0 0 24 24"><path d="M20 11.5l-7.8 7.8a4.5 4.5 0 0 1-6.4-6.4l8.2-8.2a3 3 0 0 1 4.2 4.2l-8.1 8.1a1.5 1.5 0 0 1-2.1-2.1l7.4-7.4"/></svg></button>
         <button type="button" class="tool" id="cog" title="settings"><svg aria-hidden="true" class="i" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button>
+        <button type="button" id="toolchip" class="chip" title="the tools the model can use; click to change"></button>
         <span class="sp"></span>
         <button type="button" class="tool" id="mic" title="hands-free voice"><svg aria-hidden="true" class="i" viewBox="0 0 24 24"><rect x="9" y="3.5" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/></svg></button>
         <button type="button" id="send" title="send"><svg aria-hidden="true" class="i sendi" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg><svg aria-hidden="true" class="i stopi" viewBox="0 0 24 24" style="fill:currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>

@@ -11,7 +11,7 @@ const out = process.argv[2] || '.';
 mkdirSync(out, { recursive: true });
 const W = 960,
   H = 720;
-const resolved = await resolveShader({ entry: fileURLToPath(new URL('../src/web/orb.wgsl', import.meta.url)) });
+const resolved = await resolveShader({ entry: fileURLToPath(new URL('../src/web/orb/orb.wgsl', import.meta.url)) });
 const gpu = await init();
 const colorTarget = target(gpu, { size: [W, H] });
 const fx = effect(gpu, prepareShader(resolved.wgsl));

@@ -1,5 +1,6 @@
 // Settings resolve in this order: ORA_* environment variable, config file, built-in default.
 import { dirname, join } from 'node:path';
+import { GROUPS } from './tools/catalog.ts';
 
 export interface Config {
   port: number;
@@ -9,6 +10,9 @@ export interface Config {
   modelsDir: string;
   dataDir: string;
   distDir: string | null;
+  tools: string[];
+  workDir: string;
+  searchUrl: string;
 }
 
 type Env = Record<string, string | undefined>;
@@ -33,6 +37,17 @@ function argList(envValue: string | undefined, fileValue: unknown): string[] {
   if (envValue?.trim()) return envValue.trim().split(/\s+/);
   if (Array.isArray(fileValue) && fileValue.every(v => typeof v === 'string')) return fileValue as string[];
   return [];
+}
+
+// The tool groups the page may switch on: a list in the file, or a comma-separated string in ORA_TOOLS ("none" for
+// no groups). Unknown names are dropped. Web and system tools stay off until they are listed here.
+function toolGroups(envValue: string | undefined, fileValue: unknown): string[] {
+  const names: unknown[] = envValue?.trim()
+    ? envValue.split(',').map(s => s.trim())
+    : Array.isArray(fileValue)
+      ? fileValue
+      : ['docs', 'utility'];
+  return GROUPS.filter(g => names.includes(g));
 }
 
 function parseFile(fileText: string | null): Record<string, unknown> {
@@ -60,5 +75,8 @@ export function loadConfig(env: Env, fileText: string | null): Config {
     modelsDir: text(env.ORA_MODELS_DIR) ?? text(file.modelsDir) ?? join(dirname(configPath(env)), 'models'),
     dataDir: text(env.ORA_DATA) ?? text(file.dataDir) ?? join(dataHome, 'ora'),
     distDir: text(env.ORA_DIST) ?? text(file.distDir) ?? null,
+    tools: toolGroups(env.ORA_TOOLS, file.tools),
+    workDir: text(env.ORA_WORKDIR) ?? text(file.workDir) ?? join(text(env.ORA_DATA) ?? text(file.dataDir) ?? join(dataHome, 'ora'), 'work'),
+    searchUrl: text(env.ORA_SEARCH_URL) ?? text(file.searchUrl) ?? '',
   };
 }

@@ -4,9 +4,9 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { DocMeta, Store } from '../store/store.ts';
 import type { PageTexts } from './pdfium.ts';
 import { JPEG_QUALITY, pageTexts, renderPages } from './pdfium.ts';
-import type { DocMeta, Store } from './store.ts';
 
 const WORKER_TIMEOUT_MS = 120_000;
 const MAX_WORKERS = 4;

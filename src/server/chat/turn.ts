@@ -1,12 +1,17 @@
 // One chat turn, run by the server: stores the question, builds the prompt (documents, PDF pages, history), streams
 // the reply from llama-server back as events and stores it. Voice is transcribed beforehand with transcribe().
+
+import type { PageRenderer } from '../docs/pages.ts';
+import type { Json } from '../llm/llama.ts';
+import { arr, Cancel, callLlama, obj } from '../llm/llama.ts';
+import type { DocMeta, Message, Store } from '../store/store.ts';
+import { Approvals } from '../tools/approvals.ts';
+import { definitions, find, GROUPS, summarize } from '../tools/catalog.ts';
+import type { ToolEnv } from '../tools/run.ts';
+import { runTool } from '../tools/run.ts';
 import { buildContext } from './context.ts';
-import type { Json } from './llama.ts';
-import { arr, Cancel, callLlama, obj } from './llama.ts';
-import type { PageRenderer } from './pages.ts';
-import type { Cost, Msg, PageGroup, PageRef, Part, Window } from './prompt.ts';
+import type { ApiMsg, Cost, Msg, PageGroup, PageRef, Part, Window } from './prompt.ts';
 import { assemble, calibrate, estTokens, fitHistory, selectPages } from './prompt.ts';
-import type { DocMeta, Message, Store } from './store.ts';
 
 export { Cancel };
 
@@ -15,6 +20,7 @@ export interface TurnDeps {
   pages: PageRenderer;
   llamaPort: number;
   slots: () => number;
+  tools: ToolEnv;
 }
 export interface TurnRequest {
   chatId: number | null;
@@ -25,6 +31,8 @@ export interface TurnRequest {
   temperature: number;
   maxTokens: number;
   ranges: Record<string, string>;
+  // Tool groups the user switched on for this turn; the config's `allowed` list is the ceiling.
+  tools: string[];
 }
 
 const CHARS_PER_TOKEN = 3.6;
@@ -35,6 +43,21 @@ const SHARE_PAGES = 0.5;
 // Replies always run on slot 0 and speech recognition on slot 1, so neither evicts the other's cached prompt.
 const CHAT_SLOT = 0;
 const ASR_SLOT = 1;
+const MAX_ROUNDS = 8;
+// How much of a tool's output goes to the page; the model gets all of it (the tools cap their own output).
+const UI_OUTPUT = 1500;
+
+interface PendingCall {
+  id: string;
+  name: string;
+  args: string;
+}
+interface Round {
+  text: string;
+  calls: PendingCall[];
+  usage: Json;
+  timings: Json;
+}
 
 const clampNum = (v: unknown, d: number, lo: number, hi: number): number =>
   typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d;
@@ -60,6 +83,7 @@ export function parseTurn(b: Json): TurnRequest {
     temperature: clampNum(b.temperature, 0.7, 0, 2),
     maxTokens: Math.round(clampNum(b.maxTokens, 1024, 16, 8192)),
     ranges,
+    tools: arr(b.tools).filter((g): g is string => typeof g === 'string' && GROUPS.some(x => x === g)),
   };
 }
 
@@ -119,6 +143,9 @@ export class Turns {
   private trims = new Map<number, string>();
   // Character estimates times this match the model's real token count; see calibrate().
   private scale = 1;
+  private seq = 0;
+  // Calls that act on the machine wait here for the user's Allow or Deny.
+  readonly approvals = new Approvals();
 
   constructor(deps: TurnDeps) {
     this.deps = deps;
@@ -146,6 +173,8 @@ export class Turns {
     let error = '';
     let fixedPages = 0;
     let estSent = 0;
+    let usedTools = false;
+    const steps: Json[] = [];
     try {
       const props = await callLlama(this.deps.llamaPort, 'GET', '/props', null, null, cancel);
       const nctx = Number(obj(props.default_generation_settings).n_ctx) || 0;
@@ -198,41 +227,62 @@ export class Turns {
       this.trims.set(chatId, trim);
       estSent = sysTokens + fit.msgs.reduce((a: number, m: Msg) => a + estTokens(m, cost), 0);
 
-      const body: Json = {
-        messages: assemble({ system: t.system, docs: docsText, pages: groups, history: fit.msgs, excerpts }),
-        stream: true,
-        stream_options: { include_usage: true },
-        cache_prompt: true,
-        id_slot: CHAT_SLOT,
-        temperature: t.temperature,
-        max_tokens: t.maxTokens,
-      };
-      await callLlama(
-        this.deps.llamaPort,
-        'POST',
-        '/v1/chat/completions',
-        body,
-        (e: Json) => {
-          const delta = obj(obj(arr(e.choices)[0]).delta);
-          const content = typeof delta.content === 'string' ? delta.content : '';
-          const reasoning = typeof delta.reasoning_content === 'string' ? delta.reasoning_content : '';
-          const tool = arr(delta.tool_calls).length > 0;
-          if (content || reasoning || tool) {
-            text += content;
-            send({ type: 'delta', content, reasoning, tool });
-          }
-          if (e.usage !== undefined) usage = obj(e.usage);
-          if (e.timings !== undefined) timings = obj(e.timings);
-        },
-        cancel,
+      const enabled = t.tools.filter(g => this.deps.tools.allowed.includes(g));
+      const defs = definitions(enabled);
+      const convo: Json[] = assemble({ system: t.system, docs: docsText, pages: groups, history: fit.msgs, excerpts }).map(
+        (m: ApiMsg) => m as unknown as Json,
       );
+      // Each round is one completion. If the model asks for tools they run and their results go back in the next
+      // round; after MAX_ROUNDS the model has to answer without them.
+      for (let round = 0; ; round++) {
+        const last = round >= MAX_ROUNDS || defs.length === 0;
+        const body: Json = {
+          messages: convo,
+          stream: true,
+          stream_options: { include_usage: true },
+          cache_prompt: true,
+          id_slot: CHAT_SLOT,
+          temperature: t.temperature,
+          max_tokens: t.maxTokens,
+        };
+        if (!last) body.tools = defs;
+        const r = await this.complete(body, send, cancel);
+        text += r.text;
+        if (Object.keys(r.usage).length) usage = r.usage;
+        if (Object.keys(r.timings).length) timings = r.timings;
+        if (last || !r.calls.length || cancel.cancelled) break;
+        usedTools = true;
+        if (r.text) {
+          text += '\n\n';
+          send({ type: 'delta', content: '\n\n', reasoning: '', tool: false });
+        }
+        convo.push({
+          role: 'assistant',
+          content: r.text || null,
+          tool_calls: r.calls.map((c: PendingCall, i: number) => ({
+            id: c.id || `call_${i}`,
+            type: 'function',
+            function: { name: c.name, arguments: c.args },
+          })),
+        });
+        for (let i = 0; i < r.calls.length; i++) {
+          const c = r.calls[i] as PendingCall;
+          const output = await this.exec(c, chatId, enabled, send, cancel, steps);
+          convo.push({ role: 'tool', tool_call_id: c.id || `call_${i}`, content: output });
+          if (cancel.cancelled) break;
+        }
+        if (cancel.cancelled) break;
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
 
+    // Steps are kept for the page only: toMsg() leaves 'tool' rows out of the prompt.
+    if (steps.length) store.addMessage(chatId, 'tool', steps);
     const am = text ? store.addMessage(chatId, 'assistant', text) : null;
     const prompt = Number(usage?.prompt_tokens ?? 0);
-    if (prompt > 0) this.scale = calibrate(this.scale, estSent, Math.max(0, prompt - fixedPages));
+    // With tool rounds the prompt includes tool results the estimate never covered, so it would skew the scale.
+    if (prompt > 0 && !usedTools) this.scale = calibrate(this.scale, estSent, Math.max(0, prompt - fixedPages));
     const cached = Number(timings?.cache_n ?? NaN),
       fresh = Number(timings?.prompt_n ?? NaN);
     const done: Json = {
@@ -244,6 +294,79 @@ export class Turns {
     };
     if (error) done.error = error;
     send(done);
+  }
+
+  private async complete(body: Json, send: (e: Json) => void, cancel: Cancel): Promise<Round> {
+    const r: Round = { text: '', calls: [], usage: {}, timings: {} };
+    await callLlama(
+      this.deps.llamaPort,
+      'POST',
+      '/v1/chat/completions',
+      body,
+      (e: Json) => {
+        const delta = obj(obj(arr(e.choices)[0]).delta);
+        const content = typeof delta.content === 'string' ? delta.content : '';
+        const reasoning = typeof delta.reasoning_content === 'string' ? delta.reasoning_content : '';
+        const pieces = arr(delta.tool_calls);
+        for (const p of pieces) {
+          const c = obj(p);
+          const f = obj(c.function);
+          const at = Number(c.index ?? 0);
+          while (r.calls.length <= at) r.calls.push({ id: '', name: '', args: '' });
+          const slot = r.calls[at] as PendingCall;
+          if (typeof c.id === 'string') slot.id = c.id;
+          if (typeof f.name === 'string') slot.name += f.name;
+          if (typeof f.arguments === 'string') slot.args += f.arguments;
+        }
+        if (content || reasoning || pieces.length) {
+          r.text += content;
+          send({ type: 'delta', content, reasoning, tool: pieces.length > 0 });
+        }
+        if (e.usage !== undefined) r.usage = obj(e.usage);
+        if (e.timings !== undefined) r.timings = obj(e.timings);
+      },
+      cancel,
+    );
+    return r;
+  }
+
+  // One tool call: announces it, waits for approval when the tool asks for it, runs it and reports the result. The
+  // returned text is what the model reads; failures and refusals come back as text, never as exceptions.
+  private async exec(
+    c: PendingCall,
+    chatId: number,
+    enabled: string[],
+    send: (e: Json) => void,
+    cancel: Cancel,
+    steps: Json[],
+  ): Promise<string> {
+    const id = `t${++this.seq}`;
+    const info = find(c.name);
+    let args: Json = {};
+    let bad = '';
+    try {
+      args = obj(JSON.parse(c.args || '{}'));
+    } catch {
+      bad = 'the arguments are not valid JSON';
+    }
+    const summary = info ? summarize(c.name, args) : c.name;
+    send({ type: 'tool', id, name: c.name, summary, say: info ? info.say : '', ask: info ? info.ask : false });
+    const finish = (ok: boolean, output: string, denied = false): string => {
+      send({ type: 'tool_done', id, ok, denied, output: output.slice(0, UI_OUTPUT) });
+      steps.push({ name: c.name, summary, ok, denied, output: output.slice(0, UI_OUTPUT) });
+      return output;
+    };
+    if (!info || !enabled.includes(info.group)) return finish(false, `unknown tool ${c.name}`);
+    if (bad) return finish(false, bad);
+    if (info.ask) {
+      send({ type: 'approval', id, name: c.name, summary });
+      if ((await this.approvals.wait(id, cancel)) !== 'allow') return finish(false, 'The user denied this action.', true);
+    }
+    try {
+      return finish(true, await runTool(c.name, args, this.deps.tools, this.deps.store, chatId, cancel));
+    } catch (e) {
+      return finish(false, `Error: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   // The page images for this turn: pages the user typed for a document are sent as given; for the others, pages
@@ -293,6 +416,13 @@ export class Turns {
   }
 }
 
+// Speech runs at about 3 words a second, so 6 tokens per second of 16 kHz mono audio is a generous ceiling. Without it a
+// clip of noise can be "transcribed" into a long made-up passage, which is slow and derails the chat.
+const asrTokens = (wavBase64: string): number => {
+  const seconds = Math.max(0, (wavBase64.length * 0.75 - 44) / 32000);
+  return Math.min(400, Math.max(32, Math.ceil(seconds * 6) + 24));
+};
+
 // Speech to text with the loaded model, on its own slot when the engine has more than one.
 export async function transcribe(port: number, slots: number, wavBase64: string, cancel: Cancel): Promise<string> {
   const r = await callLlama(
@@ -305,7 +435,7 @@ export async function transcribe(port: number, slots: number, wavBase64: string,
         { role: 'user', content: [{ type: 'input_audio', input_audio: { data: wavBase64, format: 'wav' } }] },
       ],
       temperature: 0,
-      max_tokens: 400,
+      max_tokens: asrTokens(wavBase64),
       id_slot: slots > 1 ? ASR_SLOT : CHAT_SLOT,
     },
     null,

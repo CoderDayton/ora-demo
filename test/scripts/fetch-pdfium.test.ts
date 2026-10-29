@@ -1,10 +1,10 @@
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import type { Lock } from '../scripts/fetch-pdfium.ts';
-import { assetUrl, checkSha, platformKey } from '../scripts/fetch-pdfium.ts';
+import type { Lock } from '../../scripts/fetch-pdfium.ts';
+import { assetUrl, checkSha, platformKey } from '../../scripts/fetch-pdfium.ts';
 
-const lock = JSON.parse(readFileSync(new URL('../ffi/pdfium.lock.json', import.meta.url), 'utf8')) as Lock;
+const lock = JSON.parse(readFileSync(new URL('../../ffi/pdfium.lock.json', import.meta.url), 'utf8')) as Lock;
 
 test('platformKey maps Node platform and arch to a lock entry', () => {
   assert.strictEqual(platformKey('linux', 'x64'), 'linux-x64');
@@ -40,8 +40,8 @@ test('checkSha accepts the right hash and rejects a changed file', () => {
 });
 
 test('ORA_PDFIUM_LIB skips the download, and must point at a real file', async () => {
-  const { ensurePdfium } = await import('../scripts/fetch-pdfium.ts');
-  const real = new URL('../package.json', import.meta.url).pathname;
+  const { ensurePdfium } = await import('../../scripts/fetch-pdfium.ts');
+  const real = new URL('../../package.json', import.meta.url).pathname;
   process.env.ORA_PDFIUM_LIB = real;
   assert.strictEqual(await ensurePdfium(), real);
   process.env.ORA_PDFIUM_LIB = '/no/such/lib.so';

@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { Engine } from '../src/server/engine.ts';
+import { Engine } from '../../src/server/engine/engine.ts';
 
 // A spawn that fails leaves a child with no pid and never emits 'exit'. Signalling pid 0 would hit Ora's own
 // process group, so the test records signals instead of sending them.

@@ -32,6 +32,9 @@ There are no prebuilt binaries: you build Ora yourself, and you supply `llama-se
   `ffi/pdfium.lock.json`. This is the only download. `ORA_PDFIUM_LIB` skips it for offline builds.
 - **At run time:** the server listens on `127.0.0.1` only, rejects requests with a foreign `Host` or `Origin`
   header, and makes no network requests of its own. It talks to the `llama-server` it started on `127.0.0.1`.
+  The one exception is opt-in: the `web` tool group (off unless the config lists it and the page switches it on)
+  lets the model fetch pages and search. The `system` group (shell and files in a work folder) asks before every
+  action. See [Tools](docs/ARCHITECTURE.md#tools).
 - **On disk:** chats, documents and the orb's memory live in the data folder. Deleting it starts fresh.
 
 ## Build
