@@ -1,10 +1,10 @@
 import { Orb } from '../orb/orb.ts';
-import type { ChatInfo, DocInfo, Part } from '../state.ts';
+import type { ChatInfo, DocInfo, Msg, Part } from '../state.ts';
 import { $, api, hooks, S, store } from '../state.ts';
 
 interface ChatData {
   chat: ChatInfo;
-  messages: { role: 'user' | 'assistant'; content: string | Part[] }[];
+  messages: { id: number; role: Msg['role']; content: string | Part[] }[];
   docs: DocInfo[];
 }
 
@@ -64,7 +64,7 @@ export async function openChat(id: number): Promise<void> {
   await hooks.abortChat();
   const d = await api<ChatData>(`/api/chats/${id}`);
   S.chatId = id;
-  S.hist = d.messages.map(m => ({ role: m.role, content: m.content }));
+  S.hist = d.messages.map(m => ({ role: m.role, content: m.content, id: m.id }));
   S.docs = d.docs;
   S.usage = null;
   S.totals = { in: 0, out: 0 };

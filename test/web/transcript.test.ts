@@ -8,6 +8,13 @@ test('empty, punctuation-only and stray one-word transcripts are noise', () => {
   }
 });
 
+test('with English expected, a transcript in another language is noise', () => {
+  assert.equal(isNoise('provò a escele.', 'English'), true);
+  assert.equal(isNoise('Non ho capito, vuoi che provo?', 'English'), true);
+  assert.equal(isNoise('provò a escele.', ''), false);
+  assert.equal(isNoise('What is the price of the café?', 'English'), false);
+});
+
 test('real sentences and short commands are kept', () => {
   for (const s of [
     'Okay, good. So.',

@@ -190,6 +190,15 @@ async function chatRoute(req: IncomingMessage, res: ServerResponse, url: URL, m:
     throw new HttpError(405, 'method not allowed');
   }
 
+  if (sub === 'messages' && method === 'DELETE') {
+    const from = Number(url.searchParams.get('from'));
+    if (!Number.isInteger(from) || from <= 0) throw new HttpError(400, 'from required');
+    if (turns.isRunning(id)) throw new HttpError(409, 'a reply is still running');
+    if (!store.deleteTurn(id, from)) throw new HttpError(404, 'no such question');
+    turns.forget(id);
+    return send(res, 200, { ok: true });
+  }
+
   if (sub === 'messages' && method === 'POST') {
     const b = await readJson(req, 32 * 1024 * 1024);
     if ((b.role !== 'user' && b.role !== 'assistant') || !contentOk(b.content)) throw new HttpError(400, 'role and content required');
@@ -308,7 +317,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const cancel = cancelOnClose(res);
     let text: string;
     try {
-      text = await transcribe(LLAMA_PORT, engine.slots(), b.audio, cancel);
+      text = await transcribe(LLAMA_PORT, engine.slots(), b.audio, cancel, typeof b.language === 'string' ? b.language : '');
     } catch (e) {
       throw new HttpError(502, e instanceof Error ? e.message : String(e));
     }

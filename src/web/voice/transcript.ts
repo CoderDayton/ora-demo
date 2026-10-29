@@ -31,11 +31,39 @@ const ALONE = new Set([
   'go',
 ]);
 
-export function isNoise(text: string): boolean {
-  const words = text
-    .replace(/\[[^\]]*\]|\([^)]*\)/g, ' ')
-    .toLowerCase()
-    .match(/[a-z0-9'-]*[a-z0-9]+/g);
+// Common function words of the languages the recognizer drifts into on noise; none of them is an English word.
+const FOREIGN = new Set([
+  'non',
+  'che',
+  'vuoi',
+  'il',
+  'di',
+  'una',
+  'sono',
+  'el',
+  'los',
+  'las',
+  'que',
+  'una',
+  'les',
+  'des',
+  'une',
+  'ich',
+  'nicht',
+  'und',
+  'das',
+  'ist',
+]);
+
+// `language` is the one the recognizer was asked for; with English, a transcript that reads as another language is noise.
+export function isNoise(text: string, language = ''): boolean {
+  const clean = text.replace(/\[[^\]]*\]|\([^)]*\)/g, ' ').toLowerCase();
+  const words = clean.match(/[a-z0-9'-]*[a-z0-9]+/g);
   if (!words) return true;
+  if (language === 'English') {
+    const all = clean.match(/[\p{L}\p{N}'-]+/gu) ?? [];
+    const accented = all.filter(w => /[^\p{ASCII}]/u.test(w)).length;
+    if (accented * 3 >= all.length || words.filter(w => FOREIGN.has(w)).length >= 2) return true;
+  }
   return words.length === 1 && !ALONE.has(words[0] as string);
 }

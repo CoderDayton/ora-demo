@@ -1,11 +1,13 @@
-import { adoptChat, newChat, pageRanges, refreshChats, renderDocs, restoreLastChat, uploadDocs } from './chat/chats.ts';
-import { addMsg, cancelMdSoon, mdSoon, note, renderLog } from './chat/render.ts';
+import { adoptChat, newChat, openChat, pageRanges, refreshChats, renderDocs, restoreLastChat, uploadDocs } from './chat/chats.ts';
+import { addDelete, addMsg, cancelMdSoon, logHooks, mdSoon, note, renderLog } from './chat/render.ts';
 import type { ToolEvent } from './chat/tools.ts';
 import {
   answerFromWords,
   awaitingApproval,
   enabledGroups,
   initToolSettings,
+  showChip,
+  takeSteps,
   toolApproval,
   toolDone,
   toolStart,
@@ -19,6 +21,7 @@ import { $, api, fmt, hooks, L, S, store } from './state.ts';
 import {
   ac,
   activeAnalyser,
+  live,
   paint,
   reveal,
   say,
@@ -55,6 +58,8 @@ interface Timings {
 // What /api/turn streams: the chat, the stored question, notes, reply deltas and a final summary.
 interface TurnEvent extends ToolEvent {
   type: string;
+  message?: { id: number };
+  plan?: Plan;
   chat?: ChatInfo;
   text?: string;
   content?: string;
@@ -280,6 +285,22 @@ function userContent(text: string, imgs: string[], voice = false): string | Part
   return parts;
 }
 
+// What auto mode chose for a turn; only the parts the page acts on are listed.
+interface Plan {
+  temperature?: number;
+  maxTokens?: number;
+  tools?: string[];
+  speed?: number;
+  pauseMs?: number;
+}
+// The speed applies to this reply and the pause to the next utterance; both go back to the settings when auto is off.
+function applyPlan(p: Plan): void {
+  live.rate = p.speed ?? 0;
+  vad.silenceMs = p.pauseMs ?? S.set.pause;
+  const bits = [p.temperature !== undefined ? `temp ${p.temperature}` : '', p.tools?.length ? p.tools.join(' + ') : ''].filter(Boolean);
+  if (bits.length) statusline(`auto: ${bits.join(', ')}`);
+}
+
 // A transcription in flight. The server runs it on its own slot, so it does not evict the chat's cached prompt.
 interface Asr {
   p: Promise<string>;
@@ -292,7 +313,7 @@ function asr(wav: string): Asr {
     method: 'POST',
     signal: ctl.signal,
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ audio: wav }),
+    body: JSON.stringify({ audio: wav, language: S.set.lang }),
   }).then(async r => {
     const j = (await r.json().catch(() => ({}))) as { text?: string; error?: string };
     if (!r.ok) throw new Error(`transcription failed: ${j.error ?? r.status}`);
@@ -383,8 +404,9 @@ async function heard(a: Asr): Promise<string> {
   pending.remove();
   transcribing = false;
   S.busy = false;
-  if (isNoise(text)) {
+  if (isNoise(text, S.set.lang)) {
     if (text) note(`didn't catch that: "${text}"`);
+    if (S.handsfree && S.set.auto) say("Sorry, I didn't catch that. Could you say it again?");
     return '';
   }
   return text;
@@ -392,6 +414,12 @@ async function heard(a: Asr): Promise<string> {
 
 async function turn(text: string, opts: { audio?: Asr }): Promise<void> {
   speechStop();
+  clearTimeout(idleTimer);
+  nudged = false;
+  if (!S.set.auto) {
+    live.rate = 0;
+    vad.silenceMs = S.set.pause;
+  }
   const voice = !!opts.audio;
   if (opts.audio) {
     text = await heard(opts.audio);
@@ -464,7 +492,13 @@ async function turn(text: string, opts: { audio?: Asr }): Promise<void> {
     else if (e.type === 'chat' && e.chat) {
       adoptChat(e.chat.id);
       void refreshChats();
-    } else if (e.type === 'note') note(e.text ?? '');
+    } else if (e.type === 'user' && e.message) {
+      const q = [...S.hist].reverse().find(m => m.role === 'user');
+      if (q) q.id = e.message.id;
+      const asked = [...document.querySelectorAll<HTMLElement>('#log .msg.user')].pop();
+      if (asked) addDelete(asked, e.message.id);
+    } else if (e.type === 'plan' && e.plan) applyPlan(e.plan);
+    else if (e.type === 'note') note(e.text ?? '');
     else if (e.type === 'tool') {
       toolStart(e);
       statusline(e.summary ?? 'calling a tool...');
@@ -495,6 +529,7 @@ async function turn(text: string, opts: { audio?: Asr }): Promise<void> {
         maxTokens: S.set.maxtok,
         ranges: pageRanges(),
         tools: enabledGroups(),
+        auto: S.set.auto,
       }),
     });
     if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? res.statusText);
@@ -512,6 +547,8 @@ async function turn(text: string, opts: { audio?: Asr }): Promise<void> {
     }
   } finally {
     toolsEnded();
+    const ran = takeSteps();
+    if (ran.length) S.hist.push({ role: 'tool', content: ran as unknown as Part[] });
     if (acc) {
       cancelMdSoon();
       paint();
@@ -605,9 +642,21 @@ const M = {
   pre: [] as Float32Array[],
   spec: null as Asr | null,
 };
+// In hands-free auto mode Ora speaks up once if the conversation goes quiet; the next turn re-arms it.
+const IDLE_MS = 45000;
+let idleTimer = 0;
+let nudged = false;
 function afterTurn(): void {
+  live.rate = 0;
   Orb.setMode(S.handsfree ? 'listening' : S.engine === 'ready' ? 'idle' : 'off');
   statusline(S.handsfree ? 'listening...' : '');
+  clearTimeout(idleTimer);
+  if (!S.handsfree || !S.set.auto || nudged || S.hist.length === 0) return;
+  idleTimer = window.setTimeout(() => {
+    if (!S.handsfree || S.busy || speaking() || vad.recording) return;
+    nudged = true;
+    say("I'm still here. Want me to summarize what we covered, or look something up?");
+  }, IDLE_MS);
 }
 speechEvents.idle = afterTurn;
 // Speaking while the orb is thinking or talking stops it and takes the new utterance.
@@ -615,6 +664,17 @@ function interrupt(): void {
   S.abort?.abort();
   speechStop();
 }
+// Deleting a turn changes what the model sees on the next one, so the chat is reloaded from the server afterwards.
+logHooks.remove = (id: number): void => {
+  if (S.busy || S.chatId === null) return;
+  const chat = S.chatId;
+  void fetch(`/api/chats/${chat}/messages?from=${id}`, { method: 'DELETE' })
+    .then(r => {
+      if (!r.ok) throw new Error(`delete failed: ${r.status}`);
+      return openChat(chat);
+    })
+    .catch((e: unknown) => note(errText(e), true));
+};
 function dropSpec(): void {
   M.spec?.ctl.abort();
   M.spec = null;
@@ -900,7 +960,7 @@ document.addEventListener('pointerdown', e => {
     opts.classList.remove('show');
 });
 
-function bindText(id: string, key: 'sys' | 'voice'): void {
+function bindText(id: string, key: 'sys' | 'voice' | 'lang'): void {
   const el = $<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(id);
   el.value = S.set[key];
   el.onchange = () => {
@@ -932,6 +992,7 @@ function bindNum(id: string, key: 'temp' | 'maxtok' | 'pagepx' | 'pause' | 'rate
 }
 bindText('#sys', 'sys');
 bindText('#voice', 'voice');
+bindText('#lang', 'lang');
 bindNum('#temp', 'temp');
 bindNum('#maxtok', 'maxtok');
 bindNum('#pagepx', 'pagepx');
@@ -974,6 +1035,13 @@ $('#mtoggle').onclick = () => {
   }
   metrics.classList.toggle('min');
   store.set('ora.metricsMin', metrics.classList.contains('min'));
+};
+const auto = $<HTMLInputElement>('#auto');
+auto.checked = S.set.auto;
+auto.onchange = () => {
+  S.set.auto = auto.checked;
+  store.set('ora.set', S.set);
+  showChip();
 };
 const speak = $<HTMLInputElement>('#speak');
 speak.checked = S.set.speak;

@@ -331,6 +331,19 @@ export class Store {
     return { id, chatId, role, content, created: t };
   }
 
+  // Removes a question and the tool steps and reply after it, up to the next question. False when `messageId` is not a
+  // question of this chat.
+  deleteTurn(chatId: number, messageId: number): boolean {
+    const rows = this.messages(chatId);
+    const at = rows.findIndex(m => m.id === messageId);
+    if (at < 0 || (rows[at] as Message).role !== 'user') return false;
+    let end = at + 1;
+    while (end < rows.length && (rows[end] as Message).role !== 'user') end++;
+    const last = (rows[end - 1] as Message).id;
+    this.sql.run('delete from messages where chat_id = ? and id >= ? and id <= ?', [chatId, messageId, last]);
+    return true;
+  }
+
   messages(chatId: number): Message[] {
     return this.sql.query('select id, chat_id, role, content, created from messages where chat_id = ? order by id', [chatId]).map(r => ({
       id: num(r[0]),

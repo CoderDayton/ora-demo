@@ -26,6 +26,8 @@ export type Part =
 export interface Msg {
   // 'tool' rows hold the steps of a turn (a list of saved tool calls), not message parts.
   role: 'user' | 'assistant' | 'system' | 'tool';
+  // The stored message id, known for questions so a turn can be deleted.
+  id?: number;
   content: string | Part[];
 }
 
@@ -55,6 +57,10 @@ export interface Settings {
   pause: number;
   // Playback speed of spoken replies, 1 = as synthesized.
   rate: number;
+  // The model tunes temperature, length, tools, PDF pages and voice timing itself, and works through longer tool chains.
+  auto: boolean;
+  // Language the speech recognizer is told to expect; empty lets it decide.
+  lang: string;
   // Tool groups switched on for turns; the server's config limits which can be.
   tools: string[];
 }
@@ -95,6 +101,8 @@ export const S = {
     pagepx: 1024,
     pause: 900,
     rate: 1.2,
+    lang: 'English',
+    auto: true,
     ...store.get<Partial<Settings>>('ora.set', {}),
     // Kept apart from the other settings so the switch-on default reaches pages that saved settings before tools existed.
     tools: store.get<string[]>('ora.tools', ['docs', 'utility']),

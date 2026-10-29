@@ -64,6 +64,15 @@ interface Saved {
   denied?: boolean;
   output?: string;
 }
+// The steps of the running turn. They are added to the history when it ends, because every redraw of the transcript
+// is built from the history and would otherwise drop the cards.
+const summaries = new Map<string, string>();
+let finished: Saved[] = [];
+export function takeSteps(): Saved[] {
+  const out = finished;
+  finished = [];
+  return out;
+}
 // The steps of an earlier turn, as stored with the chat.
 logHooks.steps = (list: unknown): void => {
   if (!Array.isArray(list)) return;
@@ -79,6 +88,7 @@ logHooks.steps = (list: unknown): void => {
 
 // A tool call has started. Tools that do not ask are announced by voice; asking tools speak their question instead.
 export function toolStart(e: ToolEvent): void {
+  summaries.set(e.id ?? '', e.summary ?? e.name ?? 'tool');
   stepEl(e.id ?? '', e.summary ?? e.name ?? 'tool');
   if (!e.ask && e.say) say(e.say);
   scrollEnd();
@@ -142,6 +152,8 @@ export function toolApproval(e: ToolEvent): void {
 
 export function toolDone(e: ToolEvent): void {
   const id = e.id ?? '';
+  finished.push({ summary: summaries.get(id), name: e.name, ok: e.ok, denied: e.denied, output: e.output });
+  summaries.delete(id);
   const el = steps.get(id);
   steps.delete(id);
   if (!el) return;
@@ -156,6 +168,7 @@ export function toolDone(e: ToolEvent): void {
 // The turn ended with a question still open (stopped, or the connection closed): the steps are over.
 export function toolsEnded(): void {
   open = null;
+  summaries.clear();
   for (const el of steps.values()) {
     part(el, 'tactions').replaceChildren();
     setState(el, 'denied', 'stopped');
@@ -177,11 +190,12 @@ let allowed: string[] | null = null;
 export const enabledGroups = (): string[] => S.set.tools.filter(g => allowed === null || allowed.includes(g));
 
 // The chip beside the composer says which tools the model can use right now.
-function showChip(): void {
+export function showChip(): void {
   const chip = $('#toolchip');
   const on = enabledGroups().map(g => SHORT[g] ?? g);
-  chip.textContent = on.length ? `Tools: ${on.join(', ')}` : 'Tools off';
-  chip.classList.toggle('off', on.length === 0);
+  const pool = on.length ? on.join(', ') : 'none';
+  chip.textContent = S.set.auto ? `Auto, tools: ${pool}` : on.length ? `Tools: ${pool}` : 'Tools off';
+  chip.classList.toggle('off', !S.set.auto && on.length === 0);
 }
 
 // Lists the tool groups in the settings. A group the config does not allow is shown off and cannot be switched on.

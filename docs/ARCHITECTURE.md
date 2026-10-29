@@ -8,6 +8,7 @@ How the Ora binary is built and why each choice was made.
 - [SQLite through FFI](#sqlite-through-ffi)
 - [Turns](#turns)
 - [Tools](#tools)
+- [Auto mode](#auto-mode)
 - [HTTP API](#http-api)
 - [Voice turns](#voice-turns)
 - [Spoken replies](#spoken-replies)
@@ -110,6 +111,29 @@ default (kept under `ora.tools` in the browser) and shows the active groups in a
 - **Events:** `tool {id,name,summary,say,ask}`, `approval {id,name,summary}`, `tool_done {id,ok,denied,output}`.
   Tools that do not ask are announced by voice with `say`.
 
+## Auto mode
+
+With `auto: true` on `POST /api/turn` (the "Auto" setting, on by default) the loaded model tunes the turn itself
+(`src/server/chat/plan.ts`). Before the reply, one short non-streaming call (temperature 0, at most 120 tokens, on the
+recognizer's slot so the chat's cached prompt is not evicted; skipped when the engine has one slot) is asked for a JSON
+plan. The server clamps every value, ignores anything it cannot read, and streams the result as a `plan` event.
+
+| Key | Range | Effect |
+|---|---|---|
+| `temperature` | 0 to 1.2 | Sampling temperature of the reply. |
+| `maxTokens` | 64 to 2048 | Reply length, never above the user's own limit. |
+| `tools` | groups on offer | Groups for this turn; `system` is offered only when the page switched it on. |
+| `pageShare` | 0.1 to 0.6 | Share of the context for PDF page images when no text document is attached. |
+| `speed` | 0.9 to 1.4 | Playback speed of this reply. |
+| `pauseMs` | 600 to 1600 | How long to wait for the user's next words. |
+
+A failed or unreadable plan is an empty plan and the turn uses the user's settings. Tool definitions are part of the
+cached prompt, so in auto mode a chat only gains groups, never loses them. Auto turns also add a short instruction to
+work step by step and allow 16 tool rounds instead of 8. Shell and file calls still ask every time.
+
+In hands-free mode with Auto on, the page says so when it did not catch an utterance, and speaks up once after 45 s of
+quiet.
+
 ## HTTP API
 
 All routes are served on `127.0.0.1:<port>`. Errors are `{ "error": string }` with the status code. A request whose
@@ -124,10 +148,11 @@ All routes are served on `127.0.0.1:<port>`. Errors are `{ "error": string }` wi
 | `POST /api/turn` | 48 MiB | Server-sent events, see [Turns](#turns). 400 on a bad body, 404 for an unknown chat. |
 | `GET /api/tools` | | Tool groups with their tools, whether the config allows each, `workDir` and whether a search URL is set. |
 | `POST /api/turn/approve` | 4 KiB | `{ id, decision: "allow" or "deny" }` answers a pending approval; returns `{ ok }` (false when none is waiting). |
-| `POST /api/asr` | 16 MiB | `{ audio }` (base64 WAV) returns `{ text }`. 400 without audio, 502 when the model call fails. |
+| `POST /api/asr` | 16 MiB | `{ audio, language? }` (base64 WAV; `language` is a plain name such as `English`) returns `{ text }`. 400 without audio, 502 when the model call fails. |
 | `GET`, `PUT /api/persona` | 64 KiB | The orb's memory (`persona.json`). |
 | `GET`, `POST /api/chats` | 4 KiB | List chats; create one (`title` is cut to 120 characters). |
 | `GET`, `PATCH`, `DELETE /api/chats/<id>` | 4 KiB | The chat with its messages and documents; rename; delete. |
+| `DELETE /api/chats/<id>/messages?from=<messageId>` | | Deletes a question and the tool steps and reply after it, up to the next question. 404 when `from` is not a question of the chat. |
 | `POST /api/chats/<id>/messages` | 32 MiB | Appends a `user` or `assistant` message. |
 | `POST /api/chats/<id>/docs?name=&px=` | 64 MiB | Adds a PDF or text file. Text is cut into 1200-character chunks with 150 overlap, at most 8,000,000 characters (413 beyond that). 422 when the file cannot be read. |
 | `GET /api/chats/<id>/context?q=&budget=` | | Document context for a question, see [SQLite through FFI](#sqlite-through-ffi). |
@@ -151,6 +176,10 @@ Transcription is speculative: after a 0.3 s pause the VAD reports `pause` and th
 it has. Speech that resumes (`resume`) drops that transcription and recording continues; if the full pause passes
 first, the words are usually ready. The microphone is read by an AudioWorklet (frames of 2048 samples at the
 device's rate, downsampled to 16 kHz for the model), with a ScriptProcessor fallback.
+
+The recognizer is asked for the language set in Settings (default English, or auto-detect), and with English a transcript
+that reads as another language is dropped like any other noise. A turn can be removed from the transcript with the
+button on its question; the chat is then reloaded from the server.
 
 The server caps a transcription at `6 x seconds + 24` tokens (32 to 400), so a clip of noise cannot turn into a long
 invented passage. The page then drops a transcript that is empty or a single word that is not a plain command

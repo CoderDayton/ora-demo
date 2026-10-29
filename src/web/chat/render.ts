@@ -90,7 +90,17 @@ export function note(text: string, isErr = false): void {
   if (isErr) Orb.error();
 }
 // Late-bound: tools.ts draws saved tool steps and imports this file.
-export const logHooks = { steps: (_steps: unknown): void => undefined };
+export const logHooks = { steps: (_steps: unknown): void => undefined, remove: (_id: number): void => undefined };
+// A question can be deleted with the tool steps and reply that followed it.
+export function addDelete(el: HTMLElement, id: number): void {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'del';
+  b.title = 'delete this turn';
+  b.textContent = 'x';
+  b.onclick = () => logHooks.remove(id);
+  el.append(b);
+}
 export function renderLog(): void {
   document.body.classList.toggle('chatting', S.hist.length > 0);
   logEl.innerHTML = '';
@@ -100,6 +110,7 @@ export function renderLog(): void {
       continue;
     }
     const d = addMsg(m.role, typeof m.content === 'string' ? m.content : '');
+    if (m.role === 'user' && m.id) addDelete(d, m.id);
     if (typeof m.content === 'string') continue;
     for (const p of m.content) {
       if (p.type === 'image_url') {

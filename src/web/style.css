@@ -625,6 +625,34 @@ body.chatting #hero {
   border: 1px solid rgba(167, 139, 250, 0.4);
   border-bottom-right-radius: 6px;
 }
+.msg.user {
+  position: relative;
+}
+.msg .del {
+  position: absolute;
+  left: -10px;
+  top: -10px;
+  width: 22px;
+  min-height: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 99px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--dim);
+  background: var(--bg);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.msg.user:hover .del,
+.msg .del:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .msg .del {
+    opacity: 0.6;
+  }
+}
 .msg.assistant {
   background: var(--glass);
   border: 1px solid var(--line);

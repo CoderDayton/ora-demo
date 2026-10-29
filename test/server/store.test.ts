@@ -24,6 +24,24 @@ test('chats list newest-updated first and titles rename', () => {
   same(db.getChat(b.id)?.title, 'renamed');
 });
 
+test('deleting a turn removes the question and everything up to the next question', () => {
+  const db = openStore(':memory:');
+  const c = db.createChat('');
+  const q1 = db.addMessage(c.id, 'user', 'one');
+  db.addMessage(c.id, 'tool', [{ name: 'x' }]);
+  db.addMessage(c.id, 'assistant', 'a1');
+  const q2 = db.addMessage(c.id, 'user', 'two');
+  db.addMessage(c.id, 'assistant', 'a2');
+  same(db.deleteTurn(c.id, q1.id), true);
+  same(
+    db.messages(c.id).map(m => m.content),
+    ['two', 'a2'],
+  );
+  same(db.deleteTurn(c.id, q2.id + 1), false);
+  same(db.deleteTurn(c.id, q2.id), true);
+  same(db.messages(c.id).length, 0);
+});
+
 test('messages round-trip structured content in order', () => {
   const db = openStore(':memory:');
   const c = db.createChat('');

@@ -231,6 +231,26 @@ test('a denied tool does not run and the model is told', async () => {
   });
 });
 
+test('a chat is reported running from its question until its reply is stored', async () => {
+  await withLlama(18811, [call('run_command', '{"command":"true"}'), say('done')], async () => {
+    const { turns } = setup(18811, ['system']);
+    const evs: Ev[] = [];
+    const running = turns.run(
+      ask('go', ['system']),
+      (e: Record<string, unknown>) => {
+        evs.push(e);
+      },
+      new Cancel(),
+    );
+    await until(() => evs.some(e => e.type === 'approval'));
+    const id = Number(((evs.find(e => e.type === 'chat') as Ev).chat as Ev).id);
+    same([turns.isRunning(id), turns.isRunning(id + 1)], [true, false]);
+    turns.approvals.resolve(String((evs.find(e => e.type === 'approval') as Ev).id), 'deny');
+    await running;
+    same(turns.isRunning(id), false);
+  });
+});
+
 test('cancelling while an approval is open ends the turn without running the tool', async () => {
   await withLlama(18806, [call('run_command', '{"command":"touch ran.txt"}')], async () => {
     const { turns, workDir } = setup(18806, ['system']);

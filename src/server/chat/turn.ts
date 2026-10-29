@@ -10,6 +10,8 @@ import { definitions, find, GROUPS, summarize } from '../tools/catalog.ts';
 import type { ToolEnv } from '../tools/run.ts';
 import { runTool } from '../tools/run.ts';
 import { buildContext } from './context.ts';
+import type { Plan } from './plan.ts';
+import { makePlan } from './plan.ts';
 import type { ApiMsg, Cost, Msg, PageGroup, PageRef, Part, Window } from './prompt.ts';
 import { assemble, calibrate, estTokens, fitHistory, selectPages } from './prompt.ts';
 
@@ -33,6 +35,8 @@ export interface TurnRequest {
   ranges: Record<string, string>;
   // Tool groups the user switched on for this turn; the config's `allowed` list is the ceiling.
   tools: string[];
+  // The model tunes the settings itself (see plan.ts) and works through longer tool chains.
+  auto: boolean;
 }
 
 const CHARS_PER_TOKEN = 3.6;
@@ -44,6 +48,10 @@ const SHARE_PAGES = 0.5;
 const CHAT_SLOT = 0;
 const ASR_SLOT = 1;
 const MAX_ROUNDS = 8;
+// Auto mode plans and chains longer on its own.
+const AUTO_ROUNDS = 16;
+const AGENT_HINT =
+  'Use tools whenever they help. Work step by step: call a tool, read its result, and call more tools until the task is done, trying different input if one fails. Then answer briefly.';
 // How much of a tool's output goes to the page; the model gets all of it (the tools cap their own output).
 const UI_OUTPUT = 1500;
 
@@ -84,6 +92,7 @@ export function parseTurn(b: Json): TurnRequest {
     maxTokens: Math.round(clampNum(b.maxTokens, 1024, 16, 8192)),
     ranges,
     tools: arr(b.tools).filter((g): g is string => typeof g === 'string' && GROUPS.some(x => x === g)),
+    auto: b.auto === true,
   };
 }
 
@@ -141,6 +150,8 @@ export class Turns {
   private windows = new Map<number, Window>();
   private chosen = new Map<number, PageRef[]>();
   private trims = new Map<number, string>();
+  private groups = new Map<number, string[]>();
+  private active = new Set<number>();
   // Character estimates times this match the model's real token count; see calibrate().
   private scale = 1;
   private seq = 0;
@@ -149,6 +160,27 @@ export class Turns {
 
   constructor(deps: TurnDeps) {
     this.deps = deps;
+  }
+
+  // True from a question being stored until its reply is; the history must not be edited meanwhile.
+  isRunning(chatId: number): boolean {
+    return this.active.has(chatId);
+  }
+
+  // The groups a chat has used in auto mode, plus any newly planned ones.
+  private grow(chatId: number, planned: string[], offered: string[]): string[] {
+    const before = this.groups.get(chatId) ?? [];
+    const all = GROUPS.filter(g => offered.includes(g) && (planned.includes(g) || before.includes(g)));
+    this.groups.set(chatId, all);
+    return all;
+  }
+
+  // Call after messages are deleted: the cached cut points index into the old history.
+  forget(chatId: number): void {
+    this.groups.delete(chatId);
+    this.windows.delete(chatId);
+    this.chosen.delete(chatId);
+    this.trims.delete(chatId);
   }
 
   async run(t: TurnRequest, emit: (e: Json) => void, cancel: Cancel): Promise<void> {
@@ -161,6 +193,7 @@ export class Turns {
     const existing = t.chatId === null ? null : store.getChat(t.chatId);
     if (t.chatId !== null && !existing) throw new Error('no such chat');
     const chatId = existing ? existing.id : store.createChat('').id;
+    this.active.add(chatId);
     const first = store.messages(chatId).length === 0;
     const um = store.addMessage(chatId, 'user', userContent(t));
     if (first) store.renameChat(chatId, t.text.replace(/\s+/g, ' ').slice(0, 48) || (t.voice ? 'Voice chat' : 'Image chat'));
@@ -194,6 +227,24 @@ export class Turns {
         .join('\n');
 
       const docs = store.docs(chatId);
+      // Auto mode never offers the shell and files unless the page switched them on.
+      const offered = this.deps.tools.allowed.filter(g => g !== 'system' || t.tools.includes('system'));
+      let plan: Plan = {};
+      if (t.auto) {
+        plan = await makePlan(this.deps.llamaPort, this.deps.slots(), t.text, offered, docs.length > 0, cancel);
+        send({ type: 'plan', plan });
+      }
+      const temperature = plan.temperature ?? t.temperature;
+      // Tool definitions are part of the cached prompt, so a chat only ever gains groups: dropping one would make the
+      // next turn read the whole history again.
+      const enabled = t.auto
+        ? this.grow(chatId, plan.tools ?? t.tools.filter(g => offered.includes(g)), offered)
+        : t.tools.filter(g => this.deps.tools.allowed.includes(g));
+      const defs = definitions(enabled);
+      // Every round shares the limit, and a tool call cut off mid-arguments is useless, so a short plan is raised.
+      const planned = plan.maxTokens ?? t.maxTokens;
+      const maxTokens = Math.min(defs.length ? Math.max(planned, 512) : planned, t.maxTokens);
+      const system = t.auto && defs.length ? `${t.system}\n\n${AGENT_HINT}` : t.system;
       const pdfs = docs.filter(d => d.kind === 'pdf' && (d.pages ?? 0) > 0);
       const hasText = docs.some(d => d.kind !== 'pdf');
       let docsText = '';
@@ -206,7 +257,14 @@ export class Turns {
       let groups: PageGroup[] = [];
       if (pdfs.length && !vision) note('this model has no vision encoder: PDF pages were not sent');
       else if (pdfs.length) {
-        groups = await this.pages(chatId, pdfs, query, t.ranges, Math.floor(nctx * (hasText ? 0.4 : SHARE_PAGES)), note);
+        groups = await this.pages(
+          chatId,
+          pdfs,
+          query,
+          t.ranges,
+          Math.floor(nctx * (hasText ? 0.4 : (plan.pageShare ?? SHARE_PAGES))),
+          note,
+        );
         for (const g of groups) {
           const d = pdfs.find(x => x.name === g.name);
           fixedPages += g.pages.length * (d ? pageTokens(d) : IMG_TOKENS);
@@ -214,8 +272,8 @@ export class Turns {
       }
 
       const cost: Cost = { charsPerToken: CHARS_PER_TOKEN, imageTokens: IMG_TOKENS, scale: this.scale };
-      const sysTokens = Math.ceil(((t.system.length + docsText.length + excerpts.length) / CHARS_PER_TOKEN) * this.scale);
-      const budget = nctx - t.maxTokens - sysTokens - fixedPages - 64;
+      const sysTokens = Math.ceil(((system.length + docsText.length + excerpts.length) / CHARS_PER_TOKEN) * this.scale);
+      const budget = nctx - maxTokens - sysTokens - fixedPages - 64;
       const fit = fitHistory(hist, budget, cost, this.windows.get(chatId));
       this.windows.set(chatId, fit.window);
       const trim = fit.dropped || fit.stripped ? `${fit.dropped}/${fit.stripped}` : '';
@@ -227,23 +285,21 @@ export class Turns {
       this.trims.set(chatId, trim);
       estSent = sysTokens + fit.msgs.reduce((a: number, m: Msg) => a + estTokens(m, cost), 0);
 
-      const enabled = t.tools.filter(g => this.deps.tools.allowed.includes(g));
-      const defs = definitions(enabled);
-      const convo: Json[] = assemble({ system: t.system, docs: docsText, pages: groups, history: fit.msgs, excerpts }).map(
+      const convo: Json[] = assemble({ system, docs: docsText, pages: groups, history: fit.msgs, excerpts }).map(
         (m: ApiMsg) => m as unknown as Json,
       );
       // Each round is one completion. If the model asks for tools they run and their results go back in the next
       // round; after MAX_ROUNDS the model has to answer without them.
       for (let round = 0; ; round++) {
-        const last = round >= MAX_ROUNDS || defs.length === 0;
+        const last = round >= (t.auto ? AUTO_ROUNDS : MAX_ROUNDS) || defs.length === 0;
         const body: Json = {
           messages: convo,
           stream: true,
           stream_options: { include_usage: true },
           cache_prompt: true,
           id_slot: CHAT_SLOT,
-          temperature: t.temperature,
-          max_tokens: t.maxTokens,
+          temperature,
+          max_tokens: maxTokens,
         };
         if (!last) body.tools = defs;
         const r = await this.complete(body, send, cancel);
@@ -277,23 +333,27 @@ export class Turns {
       error = e instanceof Error ? e.message : String(e);
     }
 
-    // Steps are kept for the page only: toMsg() leaves 'tool' rows out of the prompt.
-    if (steps.length) store.addMessage(chatId, 'tool', steps);
-    const am = text ? store.addMessage(chatId, 'assistant', text) : null;
-    const prompt = Number(usage?.prompt_tokens ?? 0);
-    // With tool rounds the prompt includes tool results the estimate never covered, so it would skew the scale.
-    if (prompt > 0 && !usedTools) this.scale = calibrate(this.scale, estSent, Math.max(0, prompt - fixedPages));
-    const cached = Number(timings?.cache_n ?? NaN),
-      fresh = Number(timings?.prompt_n ?? NaN);
-    const done: Json = {
-      type: 'done',
-      message: am,
-      usage,
-      timings,
-      cache: cached + fresh > 0 ? cached / (cached + fresh) : null,
-    };
-    if (error) done.error = error;
-    send(done);
+    try {
+      // Steps are kept for the page only: toMsg() leaves 'tool' rows out of the prompt.
+      if (steps.length) store.addMessage(chatId, 'tool', steps);
+      const am = text ? store.addMessage(chatId, 'assistant', text) : null;
+      const prompt = Number(usage?.prompt_tokens ?? 0);
+      // With tool rounds the prompt includes tool results the estimate never covered, so it would skew the scale.
+      if (prompt > 0 && !usedTools) this.scale = calibrate(this.scale, estSent, Math.max(0, prompt - fixedPages));
+      const cached = Number(timings?.cache_n ?? NaN),
+        fresh = Number(timings?.prompt_n ?? NaN);
+      const done: Json = {
+        type: 'done',
+        message: am,
+        usage,
+        timings,
+        cache: cached + fresh > 0 ? cached / (cached + fresh) : null,
+      };
+      if (error) done.error = error;
+      send(done);
+    } finally {
+      this.active.delete(chatId);
+    }
   }
 
   private async complete(body: Json, send: (e: Json) => void, cancel: Cancel): Promise<Round> {
@@ -424,14 +484,16 @@ const asrTokens = (wavBase64: string): number => {
 };
 
 // Speech to text with the loaded model, on its own slot when the engine has more than one.
-export async function transcribe(port: number, slots: number, wavBase64: string, cancel: Cancel): Promise<string> {
+// The language is only a plain name such as "English"; anything else is ignored so it cannot carry instructions.
+export async function transcribe(port: number, slots: number, wavBase64: string, cancel: Cancel, language = ''): Promise<string> {
+  const prompt = /^[A-Za-z][A-Za-z -]{0,29}$/.test(language) ? `Perform ASR in ${language}.` : 'Perform ASR.';
   const r = await callLlama(
     port,
     'POST',
     '/v1/chat/completions',
     {
       messages: [
-        { role: 'system', content: 'Perform ASR.' },
+        { role: 'system', content: prompt },
         { role: 'user', content: [{ type: 'input_audio', input_audio: { data: wavBase64, format: 'wav' } }] },
       ],
       temperature: 0,

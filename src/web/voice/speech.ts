@@ -111,6 +111,9 @@ export function speechFeed(d: string, final = false): void {
     if (!T.buf) break;
   }
 }
+// Auto mode sets the speed of the reply being spoken; 0 means the setting applies.
+export const live = { rate: 0 };
+const rate = (): number => live.rate || S.set.rate;
 // Says a short line that is not part of the reply text (a tool status, an approval question). Needs speech on.
 export function say(text: string): void {
   if (!S.set.speak) return;
@@ -154,12 +157,12 @@ async function play(): Promise<void> {
       const s = ac().createBufferSource();
       s.buffer = buf;
       // Faster playback also raises the pitch a little; up to 1.5x stays natural.
-      s.playbackRate.value = S.set.rate;
+      s.playbackRate.value = rate();
       s.connect(outAnalyser());
       T.src = s;
       s.onended = () => res();
       s.start();
-      glide(R.cap, it.end, buf.duration / S.set.rate);
+      glide(R.cap, it.end, buf.duration / rate());
     });
     T.src = null;
     if (it.id === T.id) reveal(it.end);
