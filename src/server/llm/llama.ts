@@ -72,35 +72,44 @@ export function callLlama(
       if (e) fail(e);
       else ok(v ?? {});
     };
-    const req = request({ host: '127.0.0.1', port: port, method: method, path: path, headers: hdrs }, (res: IncomingMessage) => {
-      const status = res.statusCode ?? 0;
-      const good = status >= 200 && status < 300;
-      let buf = '';
-      res.setEncoding('utf8');
-      res.on('data', (d: string) => {
-        buf += d;
-        if (good && onEvent) buf = drainEvents(buf, onEvent, cancel);
+    // A kept-alive connection the server has already closed fails before any reply; sending again on a new one is safe.
+    const attempt = (again: boolean): void => {
+      let replied = false;
+      const req = request({ host: '127.0.0.1', port: port, method: method, path: path, headers: hdrs }, (res: IncomingMessage) => {
+        replied = true;
+        const status = res.statusCode ?? 0;
+        const good = status >= 200 && status < 300;
+        let buf = '';
+        res.setEncoding('utf8');
+        res.on('data', (d: string) => {
+          buf += d;
+          if (good && onEvent) buf = drainEvents(buf, onEvent, cancel);
+        });
+        res.on('end', () => {
+          if (!good) {
+            done(null, new Error(errorMessage(buf) || `llama-server answered ${status}`));
+            return;
+          }
+          if (onEvent) {
+            done({}, null);
+            return;
+          }
+          try {
+            done(obj(JSON.parse(buf)), null);
+          } catch {
+            done(null, new Error('llama-server sent an unreadable reply'));
+          }
+        });
+        res.on('error', () => done({}, cancel.cancelled ? null : new Error('llama-server closed the connection')));
+        res.on('close', () => done({}, cancel.cancelled ? null : new Error('llama-server closed the connection')));
       });
-      res.on('end', () => {
-        if (!good) {
-          done(null, new Error(errorMessage(buf) || `llama-server answered ${status}`));
-          return;
-        }
-        if (onEvent) {
-          done({}, null);
-          return;
-        }
-        try {
-          done(obj(JSON.parse(buf)), null);
-        } catch {
-          done(null, new Error('llama-server sent an unreadable reply'));
-        }
+      req.on('error', () => {
+        if (again && !replied && !cancel.cancelled) attempt(false);
+        else done({}, cancel.cancelled ? null : new Error('llama-server is not reachable'));
       });
-      res.on('error', () => done({}, cancel.cancelled ? null : new Error('llama-server closed the connection')));
-      res.on('close', () => done({}, cancel.cancelled ? null : new Error('llama-server closed the connection')));
-    });
-    req.on('error', () => done({}, cancel.cancelled ? null : new Error('llama-server is not reachable')));
-    cancel.on(() => req.destroy());
-    req.end(data);
+      cancel.on(() => req.destroy());
+      req.end(data);
+    };
+    attempt(true);
   });
 }

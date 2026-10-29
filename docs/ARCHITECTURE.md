@@ -8,6 +8,7 @@ How the Ora binary is built and why each choice was made.
 - [SQLite through FFI](#sqlite-through-ffi)
 - [Turns](#turns)
 - [Tools](#tools)
+- [Conversation guard](#conversation-guard)
 - [Auto mode](#auto-mode)
 - [HTTP API](#http-api)
 - [Voice turns](#voice-turns)
@@ -86,7 +87,7 @@ intersects it with the config's `tools` ceiling, so the page cannot enable a gro
 Definitions are sent in the OpenAI `tools` format. A turn runs at most 8 rounds (completion, tool calls, results);
 the last round is sent without definitions so the model must answer. The final reply is stored as an `assistant`
 message, and the steps (name, summary, result, up to 1500 characters) as one `tool` message just before it, so a
-reloaded chat shows what ran. `tool` rows are never part of the prompt. The page switches `docs` and `utility` on by
+reloaded chat shows what ran. The steps also keep the call's arguments, and later turns replay each as an assistant tool call plus the saved result, so a follow-up can use what a search found. The page switches `docs` and `utility` on by
 default (kept under `ora.tools` in the browser) and shows the active groups in a chip beside the composer. Calibration of the context estimate is skipped on turns that used tools.
 
 | Group | Tools | Asks first |
@@ -111,6 +112,17 @@ default (kept under `ora.tools` in the browser) and shows the active groups in a
 - **Events:** `tool {id,name,summary,say,ask}`, `approval {id,name,summary}`, `tool_done {id,ok,denied,output}`.
   Tools that do not ask are announced by voice with `say`.
 
+## Conversation guard
+
+A small model copies what it sees: one generic reply in the history ("I'm LFM, the Liquid Foundation Model...") and it
+gives the same one again. `src/server/chat/guard.ts` keeps this out of every turn, with or without auto mode:
+
+- Before a reply, any turn whose reply occurs in two or more turns of the chat is left out of the prompt (replies under
+  20 characters may repeat). The rows stay in the chat; only the prompt changes.
+- While a reply streams, the first 40 characters are held back and compared with earlier replies. If it opens like one,
+  the generation is cancelled before the page sees any of it, the turns it copies are left out, the temperature rises by
+  0.3 (up to 1.0) and the reply is asked again once. The page gets a note.
+
 ## Auto mode
 
 With `auto: true` on `POST /api/turn` (the "Auto" setting, on by default) the loaded model tunes the turn itself
@@ -126,6 +138,7 @@ plan. The server clamps every value, ignores anything it cannot read, and stream
 | `pageShare` | 0.1 to 0.6 | Share of the context for PDF page images when no text document is attached. |
 | `speed` | 0.9 to 1.4 | Playback speed of this reply. |
 | `pauseMs` | 600 to 1600 | How long to wait for the user's next words. |
+| `memory` | 1 to 8 | How many of the latest earlier turns the question depends on; 8 or unset keeps the whole chat. The planner is shown the last eight turns as one short line each. |
 
 A failed or unreadable plan is an empty plan and the turn uses the user's settings. Tool definitions are part of the
 cached prompt, so in auto mode a chat only gains groups, never loses them. Auto turns also add a short instruction to
@@ -183,7 +196,8 @@ button on its question; the chat is then reloaded from the server.
 
 The server caps a transcription at `6 x seconds + 24` tokens (32 to 400), so a clip of noise cannot turn into a long
 invented passage. The page then drops a transcript that is empty or a single word that is not a plain command
-(`src/web/voice/transcript.ts`: "One.", "on." are dropped, "Yes." and "Stop." are kept) and says it did not catch it.
+(`src/web/voice/transcript.ts`: "One.", "on." are dropped, "Yes." and "Stop." are kept) and says it did not catch it. A transcript that trails off ("What's the...") or ends on a
+word like "the" or "to" is held for 12 s and joined to the next utterance, so one question is not sent as two turns.
 The metrics panel shows the last transcription time as `asr ms`.
 
 ## Spoken replies

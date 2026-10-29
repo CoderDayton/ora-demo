@@ -4,9 +4,17 @@ export type Part =
   | { type: 'text'; text: string; voice?: boolean }
   | { type: 'image_url'; image_url: { url: string } }
   | { type: 'input_audio'; input_audio: { data: string; format: string } };
+export interface ToolCall {
+  id: string;
+  type: string;
+  function: { name: string; arguments: string };
+}
 export interface Msg {
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string | Part[];
+  // An assistant message that called tools, and the result a tool message answers it with.
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
 }
 
 // The wire format: only the fields llama-server defines.
@@ -17,6 +25,8 @@ export type ApiPart =
 export interface ApiMsg {
   role: string;
   content: string | ApiPart[];
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
 }
 
 export interface Cost {
@@ -117,8 +127,8 @@ export function calibrate(scale: number, estimated: number, actual: number): num
 }
 
 export function toApi(msgs: Msg[]): ApiMsg[] {
-  return msgs.map(
-    (m: Msg): ApiMsg => ({
+  return msgs.map((m: Msg): ApiMsg => {
+    const out: ApiMsg = {
       role: m.role,
       content:
         typeof m.content === 'string'
@@ -128,8 +138,11 @@ export function toApi(msgs: Msg[]): ApiMsg[] {
               if (p.type === 'image_url') return { type: 'image_url', image_url: { url: p.image_url.url } };
               return { type: 'input_audio', input_audio: { data: p.input_audio.data, format: p.input_audio.format } };
             }),
-    }),
-  );
+    };
+    if (m.tool_calls) out.tool_calls = m.tool_calls;
+    if (m.tool_call_id) out.tool_call_id = m.tool_call_id;
+    return out;
+  });
 }
 
 const samePage = (a: PageRef, b: PageRef): boolean => a.docId === b.docId && a.page === b.page;

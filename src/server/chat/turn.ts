@@ -10,9 +10,11 @@ import { definitions, find, GROUPS, summarize } from '../tools/catalog.ts';
 import type { ToolEnv } from '../tools/run.ts';
 import { runTool } from '../tools/run.ts';
 import { buildContext } from './context.ts';
+import { dropEchoes, dropRepeats, echoes, lastTurns, recap } from './guard.ts';
+import { startsToolMarkup, textToolCalls } from './markup.ts';
 import type { Plan } from './plan.ts';
-import { makePlan } from './plan.ts';
-import type { ApiMsg, Cost, Msg, PageGroup, PageRef, Part, Window } from './prompt.ts';
+import { MEMORY_ALL, makePlan, PLAN_MS } from './plan.ts';
+import type { ApiMsg, Cost, Msg, PageGroup, PageRef, Part, ToolCall, Window } from './prompt.ts';
 import { assemble, calibrate, estTokens, fitHistory, selectPages } from './prompt.ts';
 
 export { Cancel };
@@ -50,10 +52,19 @@ const ASR_SLOT = 1;
 const MAX_ROUNDS = 8;
 // Auto mode plans and chains longer on its own.
 const AUTO_ROUNDS = 16;
+const CONDUCT =
+  'Answer from your own knowledge when you are sure of it; use tools only for current or changing information, arithmetic and uploaded documents. If the user disputes a fact you are sure of, keep your answer and say why, politely.';
 const AGENT_HINT =
-  'Use tools whenever they help. Work step by step: call a tool, read its result, and call more tools until the task is done, trying different input if one fails. Then answer briefly.';
+  'When a task needs tools, work step by step: call a tool, read its result, and call more tools until the task is done, trying different input if one fails. Then answer briefly.';
 // How much of a tool's output goes to the page; the model gets all of it (the tools cap their own output).
 const UI_OUTPUT = 1500;
+const PROBE_CHARS = 40;
+// After this many calls identical to earlier ones in a turn, the model has to answer without tools.
+const MAX_REPEATS = 2;
+const FINISH_NOTE = 'Answer now in plain words from what you have found. Do not call tools.';
+const REPEAT_NOTE = 'You already ran this tool with this input in this turn. Use the earlier result and answer now.';
+// A planned reply length below this cuts answers off mid-sentence.
+const MIN_PLANNED = 256;
 
 interface PendingCall {
   id: string;
@@ -61,6 +72,8 @@ interface PendingCall {
   args: string;
 }
 interface Round {
+  echoed: boolean;
+  stalled: boolean;
   text: string;
   calls: PendingCall[];
   usage: Json;
@@ -115,6 +128,21 @@ function userContent(t: TurnRequest): string | Part[] {
   const parts: Part[] = t.images.map((url: string): Part => ({ type: 'image_url', image_url: { url } }));
   parts.push(t.voice ? { type: 'text', text, voice: true } : { type: 'text', text });
   return parts;
+}
+
+// What a turn's saved tool steps look like to the model: the call it made and the result it got, so a follow-up
+// can use them. Rows saved before arguments were kept replay with empty ones.
+function toolMsgs(m: Message): Msg[] {
+  const calls: ToolCall[] = [];
+  const results: Msg[] = [];
+  for (const v of arr(m.content)) {
+    const s = obj(v);
+    if (typeof s.name !== 'string') continue;
+    const id = `call_h${m.id}_${calls.length}`;
+    calls.push({ id, type: 'function', function: { name: s.name, arguments: typeof s.args === 'string' ? s.args : '{}' } });
+    results.push({ role: 'tool', tool_call_id: id, content: typeof s.output === 'string' ? s.output : '' });
+  }
+  return calls.length ? [{ role: 'assistant', content: '', tool_calls: calls }, ...results] : [];
 }
 
 // A stored message as the prompt needs it. Content is checked, since it was read back from JSON.
@@ -214,11 +242,15 @@ export class Turns {
       const vision = obj(props.modalities).vision === true;
       if (!(nctx > 0)) throw new Error('the model is not ready');
 
-      const hist: Msg[] = [];
+      let hist: Msg[] = [];
       for (const m of store.messages(chatId)) {
-        const msg = toMsg(m);
-        if (msg) hist.push(msg);
+        if (m.role === 'tool') hist.push(...toolMsgs(m));
+        else {
+          const msg = toMsg(m);
+          if (msg) hist.push(msg);
+        }
       }
+      hist = dropRepeats(hist);
       // The question plus the one before it, so a follow-up such as "and the second one?" still finds its text.
       const query = hist
         .filter(m => m.role === 'user')
@@ -231,10 +263,20 @@ export class Turns {
       const offered = this.deps.tools.allowed.filter(g => g !== 'system' || t.tools.includes('system'));
       let plan: Plan = {};
       if (t.auto) {
-        plan = await makePlan(this.deps.llamaPort, this.deps.slots(), t.text, offered, docs.length > 0, cancel);
+        plan = await makePlan(
+          this.deps.llamaPort,
+          this.deps.slots(),
+          t.text,
+          offered,
+          docs.length > 0,
+          cancel,
+          PLAN_MS,
+          recap(hist, MEMORY_ALL),
+        );
         send({ type: 'plan', plan });
+        if (plan.memory !== undefined && plan.memory < MEMORY_ALL) hist = lastTurns(hist, plan.memory);
       }
-      const temperature = plan.temperature ?? t.temperature;
+      let temperature = plan.temperature ?? t.temperature;
       // Tool definitions are part of the cached prompt, so a chat only ever gains groups: dropping one would make the
       // next turn read the whole history again.
       const enabled = t.auto
@@ -243,8 +285,8 @@ export class Turns {
       const defs = definitions(enabled);
       // Every round shares the limit, and a tool call cut off mid-arguments is useless, so a short plan is raised.
       const planned = plan.maxTokens ?? t.maxTokens;
-      const maxTokens = Math.min(defs.length ? Math.max(planned, 512) : planned, t.maxTokens);
-      const system = t.auto && defs.length ? `${t.system}\n\n${AGENT_HINT}` : t.system;
+      const maxTokens = Math.min(Math.max(planned, defs.length ? 512 : MIN_PLANNED), t.maxTokens);
+      const system = `${t.system}\n\n${CONDUCT}${t.auto && defs.length ? `\n\n${AGENT_HINT}` : ''}`;
       const pdfs = docs.filter(d => d.kind === 'pdf' && (d.pages ?? 0) > 0);
       const hasText = docs.some(d => d.kind !== 'pdf');
       let docsText = '';
@@ -274,24 +316,30 @@ export class Turns {
       const cost: Cost = { charsPerToken: CHARS_PER_TOKEN, imageTokens: IMG_TOKENS, scale: this.scale };
       const sysTokens = Math.ceil(((system.length + docsText.length + excerpts.length) / CHARS_PER_TOKEN) * this.scale);
       const budget = nctx - maxTokens - sysTokens - fixedPages - 64;
-      const fit = fitHistory(hist, budget, cost, this.windows.get(chatId));
-      this.windows.set(chatId, fit.window);
-      const trim = fit.dropped || fit.stripped ? `${fit.dropped}/${fit.stripped}` : '';
-      if (trim && trim !== (this.trims.get(chatId) ?? '')) {
-        note(
-          `context full: ${fit.stripped ? `${fit.stripped} older image(s) and ` : ''}${fit.dropped} oldest message(s) left out of this reply`,
-        );
-      }
-      this.trims.set(chatId, trim);
-      estSent = sysTokens + fit.msgs.reduce((a: number, m: Msg) => a + estTokens(m, cost), 0);
-
-      const convo: Json[] = assemble({ system, docs: docsText, pages: groups, history: fit.msgs, excerpts }).map(
-        (m: ApiMsg) => m as unknown as Json,
-      );
+      const build = (h: Msg[]): Json[] => {
+        const fit = fitHistory(h, budget, cost, this.windows.get(chatId));
+        this.windows.set(chatId, fit.window);
+        const trim = fit.dropped || fit.stripped ? `${fit.dropped}/${fit.stripped}` : '';
+        if (trim && trim !== (this.trims.get(chatId) ?? '')) {
+          note(
+            `context full: ${fit.stripped ? `${fit.stripped} older image(s) and ` : ''}${fit.dropped} oldest message(s) left out of this reply`,
+          );
+        }
+        this.trims.set(chatId, trim);
+        estSent = sysTokens + fit.msgs.reduce((a: number, m: Msg) => a + estTokens(m, cost), 0);
+        return assemble({ system, docs: docsText, pages: groups, history: fit.msgs, excerpts }).map((m: ApiMsg) => m as unknown as Json);
+      };
+      let convo = build(hist);
+      // A reply that opens like an earlier one is held back, and the turns it copies are left out of the next try.
+      let guarded = false;
+      const ran = new Set<string>();
+      let repeats = 0;
+      let nudged = false;
+      const check = (s: string): boolean => echoes(s, hist);
       // Each round is one completion. If the model asks for tools they run and their results go back in the next
       // round; after MAX_ROUNDS the model has to answer without them.
       for (let round = 0; ; round++) {
-        const last = round >= (t.auto ? AUTO_ROUNDS : MAX_ROUNDS) || defs.length === 0;
+        const last = round >= (t.auto ? AUTO_ROUNDS : MAX_ROUNDS) || defs.length === 0 || repeats >= MAX_REPEATS;
         const body: Json = {
           messages: convo,
           stream: true,
@@ -302,7 +350,22 @@ export class Turns {
           max_tokens: maxTokens,
         };
         if (!last) body.tools = defs;
-        const r = await this.complete(body, send, cancel);
+        const r = await this.complete(body, send, cancel, guarded ? null : check);
+        if (r.echoed) {
+          guarded = true;
+          hist = dropEchoes(hist, r.text);
+          convo = build(hist);
+          temperature = Math.min(1, temperature + 0.3);
+          note('the model started repeating an earlier reply: those turns were left out and it tried again');
+          round--;
+          continue;
+        }
+        if (r.stalled && !nudged) {
+          nudged = true;
+          convo.push({ role: 'user', content: FINISH_NOTE });
+          round--;
+          continue;
+        }
         text += r.text;
         if (Object.keys(r.usage).length) usage = r.usage;
         if (Object.keys(r.timings).length) timings = r.timings;
@@ -323,7 +386,15 @@ export class Turns {
         });
         for (let i = 0; i < r.calls.length; i++) {
           const c = r.calls[i] as PendingCall;
-          const output = await this.exec(c, chatId, enabled, send, cancel, steps);
+          const key = `${c.name} ${c.args}`;
+          let output: string;
+          if (ran.has(key)) {
+            repeats++;
+            output = REPEAT_NOTE;
+          } else {
+            ran.add(key);
+            output = await this.exec(c, chatId, enabled, send, cancel, steps);
+          }
           convo.push({ role: 'tool', tool_call_id: c.id || `call_${i}`, content: output });
           if (cancel.cancelled) break;
         }
@@ -356,8 +427,18 @@ export class Turns {
     }
   }
 
-  private async complete(body: Json, send: (e: Json) => void, cancel: Cancel): Promise<Round> {
-    const r: Round = { text: '', calls: [], usage: {}, timings: {} };
+  // With `check`, the start of a plain reply is held back until PROBE_CHARS arrive; if `check` objects the round ends
+  // at once with `echoed` set and the page has seen none of it.
+  private async complete(body: Json, send: (e: Json) => void, cancel: Cancel, check: ((s: string) => boolean) | null): Promise<Round> {
+    const r: Round = { echoed: false, stalled: false, text: '', calls: [], usage: {}, timings: {} };
+    const own = new Cancel();
+    cancel.on(() => own.cancel());
+    const held: string[] = [];
+    const flush = (): void => {
+      for (const piece of held.splice(0)) send({ type: 'delta', content: piece, reasoning: '', tool: false });
+    };
+    let probing = true;
+    let markup = false;
     await callLlama(
       this.deps.llamaPort,
       'POST',
@@ -380,13 +461,43 @@ export class Turns {
         }
         if (content || reasoning || pieces.length) {
           r.text += content;
+          if (probing && !reasoning && !pieces.length) {
+            held.push(content);
+            if (startsToolMarkup(r.text)) {
+              markup = true;
+              return;
+            }
+            markup = false;
+            if (check !== null && r.text.length < PROBE_CHARS) return;
+            probing = false;
+            if (check !== null && check(r.text)) {
+              r.echoed = true;
+              own.cancel();
+              return;
+            }
+            flush();
+            return;
+          }
+          flush();
+          probing = false;
           send({ type: 'delta', content, reasoning, tool: pieces.length > 0 });
         }
         if (e.usage !== undefined) r.usage = obj(e.usage);
         if (e.timings !== undefined) r.timings = obj(e.timings);
       },
-      cancel,
+      own,
     );
+    if (probing && markup && !r.calls.length) {
+      const found = textToolCalls(r.text);
+      if (found.length) {
+        held.length = 0;
+        r.text = '';
+        if (body.tools !== undefined) r.calls = found;
+        else r.stalled = true;
+      }
+    }
+    if (probing && !r.echoed && check !== null && check(r.text)) r.echoed = true;
+    if (!r.echoed) flush();
     return r;
   }
 
@@ -413,7 +524,7 @@ export class Turns {
     send({ type: 'tool', id, name: c.name, summary, say: info ? info.say : '', ask: info ? info.ask : false });
     const finish = (ok: boolean, output: string, denied = false): string => {
       send({ type: 'tool_done', id, ok, denied, output: output.slice(0, UI_OUTPUT) });
-      steps.push({ name: c.name, summary, ok, denied, output: output.slice(0, UI_OUTPUT) });
+      steps.push({ name: c.name, summary, ok, denied, output: output.slice(0, UI_OUTPUT), args: c.args || '{}' });
       return output;
     };
     if (!info || !enabled.includes(info.group)) return finish(false, `unknown tool ${c.name}`);

@@ -33,7 +33,7 @@ import {
   speechStop,
   visibleCap,
 } from './voice/speech.ts';
-import { isNoise } from './voice/transcript.ts';
+import { isIncomplete, isNoise, joinHeld } from './voice/transcript.ts';
 import { Vad } from './voice/vad.ts';
 
 interface ModelRow {
@@ -390,6 +390,12 @@ async function send(text: string, opts: { audio?: Asr } = {}): Promise<void> {
   }
 }
 
+// A sentence cut off by a pause is kept for a few seconds and joined to what is said next, so it reaches the model
+// as one question instead of two fragments.
+const HOLD_MS = 12000;
+let held = '';
+let heldAt = 0;
+
 async function heard(a: Asr): Promise<string> {
   S.busy = true;
   transcribing = true;
@@ -411,6 +417,14 @@ async function heard(a: Asr): Promise<string> {
   if (isNoise(text, S.set.lang)) {
     if (text) note(`didn't catch that: "${text}"`);
     if (S.handsfree && S.set.auto) say("Sorry, I didn't catch that. Could you say it again?");
+    return '';
+  }
+  if (held && Date.now() - heldAt < HOLD_MS) text = joinHeld(held, text);
+  held = '';
+  if (isIncomplete(text)) {
+    held = text;
+    heldAt = Date.now();
+    note(`waiting for the rest: "${text}"`);
     return '';
   }
   return text;

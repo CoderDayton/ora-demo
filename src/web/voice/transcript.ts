@@ -81,6 +81,47 @@ const LOANWORDS = new Set([
   'pokémon',
 ]);
 
+// Words a finished sentence does not end on: a pause in the middle of a thought cuts the utterance after one of them.
+const DANGLING = new Set([
+  'the',
+  'a',
+  'an',
+  'to',
+  'of',
+  'and',
+  'or',
+  'but',
+  'so',
+  'for',
+  'with',
+  'in',
+  'on',
+  'at',
+  'about',
+  'that',
+  'is',
+  'are',
+  'was',
+  'my',
+  'your',
+  'this',
+  "what's",
+]);
+
+// An utterance the recognizer heard cut off: it trails off, or stops on a word that needs another after it.
+export function isIncomplete(text: string): boolean {
+  const t = text.trim();
+  if (/(\.{2,}|…)$/.test(t)) return true;
+  const last = t.toLowerCase().match(/[a-z0-9'-]+(?=[^a-z0-9'-]*$)/);
+  return !!last && DANGLING.has(last[0]) && !/[.!?]$/.test(t);
+}
+
+// The held fragment and the words that follow it, as one utterance.
+export function joinHeld(held: string, text: string): string {
+  const head = held.replace(/(\.{2,}|…)+\s*$/, '').trim();
+  return head ? `${head} ${text}` : text;
+}
+
 // `language` is the one the recognizer was asked for; with English, a transcript that reads as another language is noise.
 export function isNoise(text: string, language = ''): boolean {
   const clean = text.replace(/\[[^\]]*\]|\([^)]*\)/g, ' ').toLowerCase();

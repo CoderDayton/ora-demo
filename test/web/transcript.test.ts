@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import { test } from 'node:test';
-import { isNoise } from '../../src/web/voice/transcript.ts';
+import { isIncomplete, isNoise, joinHeld } from '../../src/web/voice/transcript.ts';
 
 test('empty, punctuation-only and stray one-word transcripts are noise', () => {
   for (const s of ['', '  ', '...', '.', 'on.', 'One.', 'Random.', 'Uh.', 'the', 'Mm-hmm.', '[BLANK_AUDIO]', '(silence)']) {
@@ -21,6 +21,27 @@ test('English loanwords with accents do not make an English sentence look foreig
   }
   assert.equal(isNoise('provò a escele.', 'English'), true);
   assert.equal(isNoise('café provò', 'English'), true);
+});
+
+test('a transcript that trails off or ends on a dangling word is incomplete', () => {
+  for (const s of ["What's the...", 'So what is the…', 'Can you tell me about the', 'and', 'I want to', "What's the price of"]) {
+    assert.equal(isIncomplete(s), true, s);
+  }
+  for (const s of [
+    'What is the price?',
+    'Okay.',
+    'Thanks!',
+    'Search the web for the price of LTC',
+    'Tell me a joke',
+    'USD value though in one coin.',
+  ]) {
+    assert.equal(isIncomplete(s), false, s);
+  }
+});
+
+test('a held fragment is joined to the next utterance without its trailing dots', () => {
+  assert.equal(joinHeld("What's the...", 'USD value in one coin.'), "What's the USD value in one coin.");
+  assert.equal(joinHeld('', 'hello'), 'hello');
 });
 
 test('real sentences and short commands are kept', () => {

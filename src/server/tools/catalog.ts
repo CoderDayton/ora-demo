@@ -59,7 +59,8 @@ export const TOOLS: ToolInfo[] = [
     group: 'web',
     ask: false,
     say: 'Searching the web.',
-    description: 'Searches the web and returns result titles, addresses and snippets.',
+    description:
+      'Searches the web and returns result titles, addresses and snippets. Only for current or changing information (prices, news, weather, scores) or facts you do not know; not for general knowledge or creative writing.',
     parameters: params({ query: text('What to search for.') }, ['query']),
   },
   {

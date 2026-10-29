@@ -144,7 +144,7 @@ test('a tool call runs and its result goes back to the model', async () => {
   });
 });
 
-test('tool steps are saved with the chat, between the question and the reply, and never reach the prompt', async () => {
+test('tool steps are saved with the chat and replayed to the model as a tool call and its result', async () => {
   await withLlama(18810, [call('calculate', '{"expression":"2+3"}'), say('It is 5.'), say('ok')], async f => {
     const { turns, store } = setup(18810, ['utility']);
     const evs = await run(turns, ask('what is 2+3', ['utility']));
@@ -155,13 +155,18 @@ test('tool steps are saved with the chat, between the question and the reply, an
       ['user', 'tool', 'assistant'],
     );
     same((saved[1] as { content: unknown }).content, [
-      { name: 'calculate', summary: 'Calculate 2+3', ok: true, denied: false, output: '5' },
+      { name: 'calculate', summary: 'Calculate 2+3', ok: true, denied: false, output: '5', args: '{"expression":"2+3"}' },
     ]);
     await run(turns, parseTurn({ chatId: id, text: 'again', system: '', maxTokens: 256, tools: [] }));
+    const replay = msgs(bodyOf(f, 2));
     same(
-      msgs(bodyOf(f, 2)).map(m => m.role),
-      ['system', 'user', 'assistant', 'user'],
+      replay.map(m => m.role),
+      ['system', 'user', 'assistant', 'tool', 'assistant', 'user'],
     );
+    const earlier = ((replay[2] as Record<string, unknown>).tool_calls as Record<string, unknown>[])[0] as Record<string, unknown>;
+    same((earlier.function as Record<string, unknown>).arguments, '{"expression":"2+3"}');
+    same((replay[3] as Record<string, unknown>).content, '5');
+    same((replay[3] as Record<string, unknown>).tool_call_id, earlier.id);
   });
 });
 
@@ -287,9 +292,70 @@ test('an unknown tool and a failing tool are reported to the model, not thrown',
   });
 });
 
+test('every chat carries the rule to answer known facts directly and to hold a correct answer when disputed', async () => {
+  await withLlama(18814, [say('Paris.')], async f => {
+    const { turns } = setup(18814, ['utility']);
+    await run(turns, ask('capital of France?', ['utility']));
+    const sys = String(msgs(bodyOf(f, 0))[0]?.content);
+    assert.match(sys, /own knowledge/);
+    assert.match(sys, /disputes a fact/);
+  });
+});
+
+test('a tool call written as text is run as a call and never shown', async () => {
+  const markup = '<tool_call>\n<function=calculate>\n<parameter=expression>\n2+3\n</parameter>\n</function>\n</tool_call>';
+  await withLlama(18812, [say(markup), say('It is 5.')], async f => {
+    const { turns } = setup(18812, ['utility']);
+    const evs = await run(turns, ask('what is 2+3', ['utility']));
+    const shown = evs
+      .filter(e => e.type === 'delta')
+      .map(e => String(e.content))
+      .join('');
+    same(shown, 'It is 5.');
+    same(
+      evs.filter(e => e.type === 'tool_done').map(e => e.output),
+      ['5'],
+    );
+    same(
+      msgs(bodyOf(f, 1)).map(m => m.role),
+      ['system', 'user', 'assistant', 'tool'],
+    );
+  });
+});
+
+test('a call the model repeats unchanged is not run again, and two repeats end the tool rounds', async () => {
+  const same3 = call('calculate', '{"expression":"2+3"}');
+  await withLlama(18813, [same3, same3, same3, say('5')], async f => {
+    const { turns } = setup(18813, ['utility']);
+    const evs = await run(turns, ask('x', ['utility']));
+    assert.equal(evs.filter(e => e.type === 'tool').length, 1);
+    assert.equal(f.bodies.length, 4);
+    same(bodyOf(f, 3).tools, undefined);
+    const last = msgs(bodyOf(f, 3));
+    assert.match(String(last[last.length - 1]?.content), /already/i);
+  });
+});
+
+test('a tool call written as text in the round without tools is not shown; the model is told to answer in words', async () => {
+  const markup = '<tool_call>\n<function=web_search>\n<parameter=query>\nx\n</parameter>\n</function>\n</tool_call>';
+  const same3 = call('calculate', '{"expression":"2+3"}');
+  await withLlama(18815, [same3, same3, same3, say(markup), say('The answer is 5.')], async f => {
+    const { turns } = setup(18815, ['utility']);
+    const evs = await run(turns, ask('x', ['utility']));
+    const shown = evs
+      .filter(e => e.type === 'delta')
+      .map(e => String(e.content))
+      .join('');
+    same(shown, 'The answer is 5.');
+    assert.equal(f.bodies.length, 5);
+    const last = msgs(bodyOf(f, 4));
+    same(last[last.length - 1]?.role, 'user');
+  });
+});
+
 test('tool rounds are capped, and the last request goes out without tools', async () => {
   const script: Step[] = [];
-  for (let i = 0; i < 12; i++) script.push(call('current_time', '{}'));
+  for (let i = 0; i < 12; i++) script.push(call('calculate', `{"expression":"${i}+1"}`));
   await withLlama(18808, script, async f => {
     const { turns } = setup(18808, ['utility']);
     const evs = await run(turns, ask('loop', ['utility']));
